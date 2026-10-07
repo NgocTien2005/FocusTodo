@@ -1,0 +1,38 @@
+# Flutter and Dart generated output
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+build/
+coverage/
+**/doc/api/
+
+# Android machine-local and build files
+android/.gradle/
+android/captures/
+android/local.properties
+android/key.properties
+android/**/GeneratedPluginRegistrant.java
+*.jks
+*.keystore
+
+# IDE user state
+.idea/
+*.iml
+.vscode/
+*.swp
+*.log
+.DS_Store
+Thumbs.db
+
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+secrets/
+.aws/
+*.pem
+*.p12
+
+# Application dependencies must be reproducible: track pubspec.lock.
