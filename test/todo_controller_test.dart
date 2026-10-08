@@ -20,6 +20,164 @@ void main() {
   });
   tearDown(() => controller.dispose());
 
+  group('search', () {
+    late SharedPreferencesTodoRepository repository;
+
+    setUp(() async {
+      repository = SharedPreferencesTodoRepository(store: store);
+      Todo item(
+        int id,
+        String title, {
+        String? description,
+        DateTime? due,
+        bool completed = false,
+      }) => Todo(
+        id: 'search-$id',
+        title: title,
+        description: description,
+        dueAt: due?.toUtc(),
+        createdAt: now.toUtc(),
+        notificationId: id,
+        isCompleted: completed,
+      );
+
+      await repository.saveTodos([
+        item(0, 'Read Flutter'),
+        item(1, 'Buy milk', description: 'Grocery list', due: now),
+        item(
+          2,
+          'Submit draft',
+          description: 'Read review notes',
+          due: DateTime(2026, 10, 8, 15),
+        ),
+        item(3, 'Read yesterday', due: DateTime(2026, 10, 6, 23, 59)),
+        item(4, 'Read midnight today', due: DateTime(2026, 10, 7)),
+        item(5, 'Read tomorrow', due: DateTime(2026, 10, 8)),
+        item(6, 'Read completed', due: now, completed: true),
+        item(7, 'Literal [a.*] notes'),
+      ]);
+      await controller.loadTodos();
+    });
+
+    List<String> titles() =>
+        controller.visibleTodos.map((todo) => todo.title).toList();
+
+    test('matches a substring of the title', () {
+      controller.setSearchQuery('Flutt');
+      expect(titles(), ['Read Flutter']);
+    });
+
+    test('matches descriptions and safely skips null descriptions', () {
+      controller.setSearchQuery('review');
+      expect(titles(), ['Submit draft']);
+      controller.setSearchQuery('grocery');
+      expect(titles(), ['Buy milk']);
+    });
+
+    test('ignores case in both title and description', () {
+      controller.setSearchQuery('rEaD');
+      expect(titles(), [
+        'Read Flutter',
+        'Submit draft',
+        'Read yesterday',
+        'Read midnight today',
+        'Read tomorrow',
+      ]);
+    });
+
+    test('ignores surrounding whitespace and retains entered query', () {
+      controller.setSearchQuery(' \t ReViEw \n ');
+      expect(titles(), ['Submit draft']);
+      expect(controller.searchQuery, ' \t ReViEw \n ');
+      expect(controller.hasSearchQuery, isTrue);
+    });
+
+    test('empty and whitespace-only queries restore the selected category', () {
+      controller.selectCategory(TodoCategory.today);
+      controller.setSearchQuery('read');
+      expect(titles(), ['Read midnight today']);
+      for (final query in ['', ' \n\t ']) {
+        controller.setSearchQuery(query);
+        expect(controller.hasSearchQuery, isFalse);
+        expect(titles(), ['Buy milk', 'Read midnight today']);
+        controller.setSearchQuery('read');
+      }
+    });
+
+    test(
+      'unmatched query returns an empty list without changing active items',
+      () {
+        controller.setSearchQuery('not present');
+        expect(controller.visibleTodos, isEmpty);
+        expect(controller.activeTodos, hasLength(7));
+      },
+    );
+
+    test('regular expression characters are literal substrings', () {
+      controller.setSearchQuery('[a.*]');
+      expect(titles(), ['Literal [a.*] notes']);
+      controller.setSearchQuery('^Read');
+      expect(controller.visibleTodos, isEmpty);
+    });
+
+    for (final entry in {
+      TodoCategory.all: [
+        'Read Flutter',
+        'Submit draft',
+        'Read yesterday',
+        'Read midnight today',
+        'Read tomorrow',
+      ],
+      TodoCategory.today: ['Read midnight today'],
+      TodoCategory.upcoming: ['Submit draft', 'Read tomorrow'],
+    }.entries) {
+      test('composes with ${entry.key.name} and excludes completed items', () {
+        controller.selectCategory(entry.key);
+        controller.setSearchQuery('read');
+        expect(titles(), entry.value);
+      });
+    }
+
+    test('changing categories retains the query and original order', () {
+      controller.setSearchQuery('  rEaD  ');
+      controller.selectCategory(TodoCategory.upcoming);
+      expect(titles(), ['Submit draft', 'Read tomorrow']);
+      controller.selectCategory(TodoCategory.today);
+      expect(titles(), ['Read midnight today']);
+      controller.selectCategory(TodoCategory.all);
+      expect(titles().first, 'Read Flutter');
+      expect(titles().last, 'Read tomorrow');
+      expect(controller.searchQuery, '  rEaD  ');
+    });
+
+    test(
+      'search never writes or mutates stored TODOs and resets on restart',
+      () async {
+        final document = store.document;
+        final writes = store.writes;
+        final original = controller.activeTodos;
+        for (final query in ['read', 'missing', '  ', '']) {
+          controller.setSearchQuery(query);
+          controller.selectCategory(TodoCategory.upcoming);
+          controller.visibleTodos;
+        }
+        expect(store.writes, writes);
+        expect(store.document, document);
+        expect(controller.activeTodos, original);
+        controller.setSearchQuery('read');
+        final restarted = TodoController(
+          repository: repository,
+          clock: () => now,
+        );
+        addTearDown(restarted.dispose);
+        await restarted.loadTodos();
+        expect(restarted.searchQuery, isEmpty);
+        expect(restarted.visibleTodos, hasLength(7));
+        expect(store.writes, writes);
+      },
+    );
+  });
+
   test('loading prevents creation; failed load can be retried without changing category', () async {
     store.failRead = true;
     controller.selectCategory(TodoCategory.upcoming);

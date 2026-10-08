@@ -14,9 +14,14 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+  late final TextEditingController _search;
+
   @override
   void initState() {
     super.initState();
+    _search = TextEditingController(
+      text: context.read<TodoController>().searchQuery,
+    );
     WidgetsBinding.instance.addObserver(this);
   }
 
@@ -30,6 +35,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _search.dispose();
     super.dispose();
   }
 
@@ -60,12 +66,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final todos = controller.visibleTodos;
     if (todos.isEmpty) {
       return EmptyState(
-        message: controller.category == TodoCategory.all
-            ? 'No active TODOs. Add one to get started.'
+        message: controller.activeTodos.isEmpty
+            ? 'No active TODOs.'
+            : controller.hasSearchQuery
+            ? 'No matching TODOs in this category.'
             : 'No TODOs in this category.',
       );
     }
     return ListView.separated(
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       padding: const EdgeInsets.symmetric(vertical: 16),
       itemCount: todos.length,
       separatorBuilder: (_, _) => const SizedBox(height: 8),
@@ -102,11 +111,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  void _comingNext(BuildContext context, String feature) {
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text('Coming next: $feature.')));
-  }
-
   @override
   Widget build(BuildContext context) {
     final controller = context.watch<TodoController>();
@@ -136,13 +140,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ),
               const SizedBox(height: 20),
               TextField(
-                readOnly: true,
-                onTap: () => _comingNext(context, 'search TODOs'),
-                decoration: const InputDecoration(
+                key: const Key('todo-search'),
+                controller: _search,
+                onChanged: controller.setSearchQuery,
+                decoration: InputDecoration(
                   labelText: 'Search TODOs',
-                  helperText: 'Coming next',
-                  prefixIcon: Icon(Icons.search),
-                  border: OutlineInputBorder(),
+                  prefixIcon: const Icon(Icons.search),
+                  suffixIcon: _search.text.isEmpty
+                      ? null
+                      : IconButton(
+                          tooltip: 'Clear search',
+                          onPressed: () {
+                            _search.clear();
+                            controller.setSearchQuery('');
+                          },
+                          icon: const Icon(Icons.clear),
+                        ),
+                  border: const OutlineInputBorder(),
                 ),
               ),
               Expanded(child: _content(controller)),
