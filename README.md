@@ -8,11 +8,19 @@ Deadline: **11 October 2026**.
 
 The assignment says “console-based” but requires Flutter local notifications. We assume a simple Flutter Android mobile application. **Ask the instructor to clarify this assumption before implementing further features.** No terminal-style UI or separate CLI is planned.
 
-The six requirements are dated/timed TODO creation, All/Today/Upcoming categories, category filtering, search, notifications ten minutes before due time, and completion removal from active lists. This feature adds TODO creation and local persistence to the reviewed foundation.
+The six requirements are dated/timed TODO creation, All/Today/Upcoming categories, category filtering, search, notifications ten minutes before due time, and completion removal from active lists. TODO creation/storage from PR #1 is merged; this feature adds search to the existing category lists.
 
 Implemented: validated TODO creation with an optional description and local date/time pickers; clearing the due time; SharedPreferences persistence and startup loading/retry; stable TODO/notification IDs; All/Today/Upcoming filtering; local due-time display; completed-item exclusion; and loading/error/empty/list states. The scrollable form rejects blank titles, incomplete date/time selections and past due times, disables Save during a write, retains input on storage failure, and closes only after persistence succeeds. Categories refresh when the app resumes.
 
-Pending: search, edit/delete/completion actions, notification permissions, scheduling/cancellation, and scheduling timezone initialization. Search and reminders are explicitly marked as coming next. NotificationService remains an abstract contract and is never invoked by this feature. No sample data is created by the app.
+Pending: completion actions and reminder notifications (permissions, scheduling/cancellation, and timezone initialization); editing/deletion also remain future work. Completed records are already excluded from active lists, but the UI cannot mark an item complete yet. NotificationService remains an abstract contract and is never invoked by this feature. No sample data is created by the app.
+
+## Search
+
+Home filters immediately as you type in Search TODOs. It matches literal substrings in titles or optional descriptions, ignoring case and leading/trailing query whitespace. Characters such as `.*` or `[` are treated as text, not regular expressions. An empty or whitespace-only query restores all active items in the selected category.
+
+Search combines with All/Today/Upcoming, continues excluding completed TODOs, and preserves the existing repository order. It only changes controller state: no stored TODOs are modified and no storage writes are triggered. The entered text and query remain when switching categories or returning from the create screen, including after saving. A newly saved item appears only if it matches both the category and query. Query state stays in memory and starts empty after an app restart.
+
+The clear button is visible whenever the field contains text, including whitespace, and clears both the field and query. Rebuilds retain text, cursor position, and focus; dragging the TODO list dismisses the keyboard. Empty states distinguish `No active TODOs.`, `No TODOs in this category.`, and `No matching TODOs in this category.` Loading, errors, and Retry take precedence over list results.
 
 ## Local storage
 
@@ -42,18 +50,18 @@ lib/
   main.dart                       entry point
   app.dart                        theme and Provider wiring
   models/todo.dart                immutable model and JSON
-  controllers/todo_controller.dart load/create state, validation, clock, categories
+  controllers/todo_controller.dart load/create state, validation, clock, categories, search
   repositories/todo_repository.dart persistence contract
   repositories/shared_preferences_todo_repository.dart JSON storage and ID allocation
   services/notification_service.dart notification contract
-  screens/home_screen.dart        startup states, category list and resume refresh
+  screens/home_screen.dart        startup states, search/category list and resume refresh
   screens/create_todo_screen.dart validated, scrollable create form
   widgets/empty_state.dart        empty state
 test/
-  widget_test.dart                creation, pickers, errors, keyboard and resume
+  widget_test.dart                search, creation, pickers, errors, keyboard and resume
   todo_test.dart                  serialization and copyWith
   todo_repository_test.dart       persistence, corruption, IDs, concurrent writes
-  todo_controller_test.dart       state, validation, retry and calendar boundaries
+  todo_controller_test.dart       search, state, validation, retry and calendar boundaries
   support/memory_document_store.dart controllable storage failures for tests
 ```
 
@@ -83,6 +91,10 @@ flutter run -d emulator-5554
 3. On the create form, try a blank title, a date without a time, and a past time today. Each must remain on the form with an error. Clear due time to save the item as undated.
 4. Close the app and launch it again (do not uninstall or clear app data). Verify the titles, descriptions and due times remain, and check all three categories again. A same-day overdue item remains in Today and All; a previous-day item remains in All only.
 5. Leave the app in the background across local midnight, then resume it. Verify Today/Upcoming use the new calendar date. Rotate or use a small screen with the keyboard open; scroll to Save and verify the form remains usable.
+6. Search using part of a title, then part of a description. Try mixed case and surrounding spaces; confirm the same results. Use a missing phrase to check the no-matching message. Try literal punctuation such as `.*` in a title/query.
+7. With a query entered, switch All/Today/Upcoming. Confirm the text stays and each list satisfies both filters. Tap Clear search; confirm the field empties and only the selected category's items return. A whitespace-only query must also show the full category list.
+8. Enter a query, open Add TODO and return without saving; confirm the text and category remain. Create a matching TODO and a nonmatching TODO; only the matching item should appear (if also in the category). Clear search to see both in All.
+9. Focus search and drag a long TODO list; confirm the keyboard closes. Restart the app; confirm query text resets while saved TODOs remain.
 
 Storage-failure retention and corrupted-data recovery are covered by automated tests. No destructive clear-data recovery action is built into the app. Clearing app data or uninstalling removes local preferences. Reminder delivery, editing, deletion and completion are not available yet.
 
@@ -121,11 +133,11 @@ Git **2.52.0.windows.1**, Android Studio **2025.2.3**, its OpenJDK **21.0.8**, S
 
 Android uses the stable Flutter template: **AGP 9.1.0**, **Gradle 9.3.1**, **Kotlin 2.4.0**, Java/Kotlin target **17**, compile/target SDK **36**, minimum SDK **24**, and NDK **28.2.13676358**. The generated AGP compatibility flags are preserved. Desugaring **2.1.4**, multidex, scheduled/reboot receivers, and the three app permissions above were configured after reading the resolved plugin's official README. The plugin also supplies its standard vibration permission.
 
-The foundation previously passed six tests. For this feature, `dart format lib test`, `flutter analyze --no-pub`, and `flutter test --no-pub` succeeded: **no analysis issues and all 33 tests passed**. Coverage includes dated/undated round trips, a fresh repository/controller loading saved data, malformed/unsupported data preservation, write/read failures, allocator persistence/exhaustion and historical ID reuse prevention, concurrent writes, validation, repeated submission, UTC-to-local calendar boundaries (midnight and overdue), creation on Home, input retention on failure, loading/retry, keyboard layout and resume refresh.
+Search verification on **8 October 2026**, on `feature/todo-search`: `dart format lib test` succeeded (15 files, 4 formatted); `flutter analyze` succeeded with **no issues**; `flutter test` succeeded with **all 52 tests passed**. Search tests cover title/nullable-description matching, case, surrounding whitespace, empty reset, no matches, literal punctuation, all categories, completed exclusion, retained query/order, unchanged storage, restart reset, field focus/cursor retention, clear, empty messages, create navigation, matching/nonmatching creation, and keyboard dismissal on list drag. Existing creation, persistence, validation, error/retry, serialization, stable ID, local calendar boundary, and lifecycle assertions remain covered.
 
-**`flutter build apk --debug --no-pub` passed** and produced `build/app/outputs/flutter-apk/app-debug.apk` (final incremental build: 10.1 seconds). The pinned NDK **28.2.13676358** and Gradle distribution are now installed. Rechecked `flutter doctor -v` still reports missing Android command-line tools and unknown license status; these warnings did not block the verified APK build with the currently installed SDK.
+**`flutter build apk --debug` passed** and produced `build/app/outputs/flutter-apk/app-debug.apk` (`assembleDebug`: 36.8 seconds). The pinned NDK **28.2.13676358** and Gradle distribution are installed. PR #1's `flutter doctor -v` reported missing Android command-line tools and unknown license status; doctor/license checks were not rerun for search. SDK lock/cache access outside the workspace required running Flutter/Dart verification outside the restricted filesystem sandbox.
 
-**Device verification remains pending.** An Android 17/API 37 emulator was visible at the initial check, but the subsequent APK installation attempt failed with `device 'emulator-5554' not found`. The final device check lists Windows/Chrome/Edge only; `flutter emulators` lists the configured **Pixel_9** AVD. No successful Android launch or manual persistence test is claimed.
+**Android search verification is blocked.** The initial `flutter devices` check listed only Windows/Chrome/Edge. `flutter emulators` listed **Pixel_9**, and `flutter emulators --launch Pixel_9` exited successfully. However, `adb devices -l` reported `emulator-5554 offline`; querying boot completion returned `device offline`. Reconnecting the offline emulator did not make it usable, and `adb -s emulator-5554 install -r build/app/outputs/flutter-apk/app-debug.apk` failed with `device offline`. No successful Android app launch or typing/clearing/category-switching device check is claimed; widget tests and the APK build do not substitute for device verification.
 
 Manual setup:
 

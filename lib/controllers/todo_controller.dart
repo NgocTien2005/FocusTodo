@@ -22,6 +22,7 @@ class TodoController extends ChangeNotifier {
   final TodoClock _clock;
   List<Todo> _todos = [];
   TodoCategory _category = TodoCategory.all;
+  String _searchQuery = '';
   bool _loading = true;
   bool _loaded = false;
   bool _saving = false;
@@ -31,6 +32,8 @@ class TodoController extends ChangeNotifier {
   Future<void>? _loadFuture;
 
   TodoCategory get category => _category;
+  String get searchQuery => _searchQuery;
+  bool get hasSearchQuery => _searchQuery.trim().isNotEmpty;
   bool get isLoading => _loading;
   bool get isSaving => _saving;
   String? get loadError => _loadError;
@@ -42,8 +45,14 @@ class TodoController extends ChangeNotifier {
 
   List<Todo> get visibleTodos {
     final today = _calendarDate(currentTime.toLocal());
+    final query = _searchQuery.trim().toLowerCase();
     return List.unmodifiable(
       activeTodos.where((todo) {
+        if (query.isNotEmpty &&
+            !todo.title.toLowerCase().contains(query) &&
+            !(todo.description?.toLowerCase().contains(query) ?? false)) {
+          return false;
+        }
         if (_category == TodoCategory.all) return true;
         final due = todo.dueAt?.toLocal();
         if (due == null) return false;
@@ -129,6 +138,12 @@ class TodoController extends ChangeNotifier {
   void selectCategory(TodoCategory category) {
     if (_category == category) return;
     _category = category;
+    _notify();
+  }
+
+  void setSearchQuery(String query) {
+    if (_searchQuery == query) return;
+    _searchQuery = query;
     _notify();
   }
 
