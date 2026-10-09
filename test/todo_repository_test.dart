@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:focus_todo/controllers/todo_controller.dart';
 import 'package:focus_todo/models/todo.dart';
 import 'package:focus_todo/repositories/shared_preferences_todo_repository.dart';
+import 'package:focus_todo/repositories/todo_repository.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'support/memory_document_store.dart';
@@ -172,6 +173,60 @@ void main() {
       );
     },
   );
+
+  test(
+    'completion preserves the document, is idempotent, and survives restart',
+    () async {
+      final store = MemoryDocumentStore();
+      final repository = SharedPreferencesTodoRepository(store: store);
+      final first = await repository.createTodo(
+        title: 'Keep fields',
+        description: 'Details',
+        dueAt: now.add(const Duration(days: 1)),
+        createdAt: now,
+      );
+      final other = await repository.createTodo(title: 'Other', createdAt: now);
+      final before = jsonDecode(store.document!) as Map<String, dynamic>;
+      final completed = await repository.completeTodo(first.id);
+      expect(completed.isCompleted, isTrue);
+      expect(completed.title, first.title);
+      expect(completed.description, first.description);
+      expect(completed.dueAt!.isAtSameMomentAs(first.dueAt!), isTrue);
+      expect(completed.createdAt.isAtSameMomentAs(first.createdAt), isTrue);
+      expect(completed.notificationId, first.notificationId);
+      expect(
+        (await repository.completeTodo(first.id)).toJson(),
+        completed.toJson(),
+      );
+      final after = jsonDecode(store.document!) as Map<String, dynamic>;
+      expect(after['schemaVersion'], before['schemaVersion']);
+      expect(after['nextTodoId'], before['nextTodoId']);
+      expect(after['nextNotificationId'], before['nextNotificationId']);
+      expect((after['todos'] as List).length, 2);
+      final restarted = await SharedPreferencesTodoRepository(store: store)
+          .loadTodos();
+      expect(restarted.last.toJson(), other.toJson());
+    },
+  );
+
+  test('completion reports unknown IDs and failed writes', () async {
+    final store = MemoryDocumentStore();
+    final repository = SharedPreferencesTodoRepository(store: store);
+    final todo = await repository.createTodo(title: 'Retry', createdAt: now);
+    final original = store.document;
+    await expectLater(
+      repository.completeTodo('missing'),
+      throwsA(isA<TodoNotFoundException>()),
+    );
+    store.rejectWrite = true;
+    await expectLater(
+      repository.completeTodo(todo.id),
+      throwsA(isA<TodoStorageException>()),
+    );
+    expect(store.document, original);
+    store.rejectWrite = false;
+    expect((await repository.completeTodo(todo.id)).isCompleted, isTrue);
+  });
 
   test('storage read failure is surfaced', () async {
     final store = MemoryDocumentStore()..failRead = true;

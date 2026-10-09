@@ -12,7 +12,9 @@ The six requirements are dated/timed TODO creation, All/Today/Upcoming categorie
 
 Implemented: validated TODO creation with an optional description and local date/time pickers; clearing the due time; SharedPreferences persistence and startup loading/retry; stable TODO/notification IDs; All/Today/Upcoming filtering; local due-time display; completed-item exclusion; and loading/error/empty/list states. The scrollable form rejects blank titles, incomplete date/time selections and past due times, disables Save during a write, retains input on storage failure, and closes only after persistence succeeds. Categories refresh when the app resumes.
 
-Pending: completion actions and reminder notifications (permissions, scheduling/cancellation, and timezone initialization); editing/deletion also remain future work. Completed records are already excluded from active lists, but the UI cannot mark an item complete yet. NotificationService remains an abstract contract and is never invoked by this feature. No sample data is created by the app.
+Implemented: durable completion with a checkbox on each active TODO. Completion updates only the requested record from the latest stored document, retains its fields and ID, preserves unrelated records and allocator counters, and is idempotent. Active All/Today/Upcoming/search results exclude completed records. The UI shows per-item progress, prevents duplicate taps, removes the item only after persistence succeeds, and retains it with a retryable error on failure. Category and search state are preserved. NotificationService remains an abstract contract and is not invoked. No sample data is created by the app.
+
+Pending: reminder notifications (permissions, scheduling/cancellation, timezone initialization); editing/deletion also remain future work. The notification feature must cancel the completed TODO's reminder using its stable `notificationId`, surface cancellation failures, and reconcile stored completed records at startup so old reminders are removed. It must not schedule reminders for completed or undated records.
 
 ## Search
 
@@ -35,7 +37,7 @@ Repository creation writes each `todo-N` ID, nonnegative int32 notification ID, 
 - Upcoming: incomplete TODOs due on a calendar date after today.
 - Include midnight correctly. Compare local calendar components or use local calendar midnight boundaries; never assume a day is a fixed 24-hour duration.
 - Search combines with the selected category and ignores case and surrounding whitespace.
-- Completion hides a TODO from active lists and cancels its reminder.
+- Completion hides a TODO from active lists and the upcoming notification feature must cancel its reminder.
 - A TODO without a due time has no reminder.
 - Reminder time is `dueAt` minus ten minutes. If it has already passed, disclose that a full ten-minute advance reminder is unavailable; never schedule into the past.
 - Editing or deleting a TODO must update or cancel its reminder.
@@ -95,8 +97,9 @@ flutter run -d emulator-5554
 7. With a query entered, switch All/Today/Upcoming. Confirm the text stays and each list satisfies both filters. Tap Clear search; confirm the field empties and only the selected category's items return. A whitespace-only query must also show the full category list.
 8. Enter a query, open Add TODO and return without saving; confirm the text and category remain. Create a matching TODO and a nonmatching TODO; only the matching item should appear (if also in the category). Clear search to see both in All.
 9. Focus search and drag a long TODO list; confirm the keyboard closes. Restart the app; confirm query text resets while saved TODOs remain.
+10. Complete a TODO from All, Today, or Upcoming, then repeat with a search query active. Confirm it disappears after the save succeeds, category/query remain selected, the confirmation appears, and the correct empty state is shown when the last visible result is completed. Reject a write to confirm the item stays visible and retry works. Restart and confirm the completed record remains saved but hidden. Notification cancellation is pending until the notification service is implemented.
 
-Storage-failure retention and corrupted-data recovery are covered by automated tests. No destructive clear-data recovery action is built into the app. Clearing app data or uninstalling removes local preferences. Reminder delivery, editing, deletion and completion are not available yet.
+Storage-failure retention and corrupted-data recovery are covered by automated tests. Completion checks: complete one TODO in All, Today, and Upcoming and confirm it disappears; search for it and confirm the result disappears; complete the last visible result and confirm the appropriate empty state; reject a completion write and confirm the TODO remains and can be retried; tap the checkbox repeatedly while pending and confirm there is one write; restart the app and confirm the completed TODO remains stored and hidden. Verify that descriptions, due times, IDs, unrelated TODOs, and allocator counters remain unchanged. No destructive clear-data recovery action is built into the app. Clearing app data or uninstalling removes local preferences. Reminder delivery, editing and deletion remain future work.
 
 ## Notifications and platform limitations
 
@@ -138,6 +141,8 @@ Search verification on **8 October 2026**, on `feature/todo-search`: `dart forma
 **`flutter build apk --debug` passed** and produced `build/app/outputs/flutter-apk/app-debug.apk` (`assembleDebug`: 36.8 seconds). The pinned NDK **28.2.13676358** and Gradle distribution are installed. PR #1's `flutter doctor -v` reported missing Android command-line tools and unknown license status; doctor/license checks were not rerun for search. SDK lock/cache access outside the workspace required running Flutter/Dart verification outside the restricted filesystem sandbox.
 
 **Android search verification is blocked.** The initial `flutter devices` check listed only Windows/Chrome/Edge. `flutter emulators` listed **Pixel_9**, and `flutter emulators --launch Pixel_9` exited successfully. However, `adb devices -l` reported `emulator-5554 offline`; querying boot completion returned `device offline`. Reconnecting the offline emulator did not make it usable, and `adb -s emulator-5554 install -r build/app/outputs/flutter-apk/app-debug.apk` failed with `device offline`. No successful Android app launch or typing/clearing/category-switching device check is claimed; widget tests and the APK build do not substitute for device verification.
+
+Completion verification on **9 October 2026**, on `feature/todo-completion`: `dart format lib test` succeeded; `flutter analyze` succeeded with **no issues**; `flutter test` succeeded with **all 59 tests passed**. Added coverage verifies persistent/idempotent completion, preservation of fields, unrelated records and allocator counters, unknown IDs, rejected writes, controller recreation, duplicate completion, concurrent create/completion, retry after failure, filtering through All/Today/Upcoming and search, pending UI, last-item empty state and success/error feedback. **`flutter build apk --debug` passed** and produced `build/app/outputs/flutter-apk/app-debug.apk` (`assembleDebug`: 40.1 seconds). Android launch was attempted by starting `Pixel_9`; `adb` then reported `emulator-5554 offline`, and Flutter continued to list only Windows/Chrome/Edge. No device launch or device test is claimed. The project shell did not have `adb` on PATH; direct invocation from the configured SDK confirmed the offline status.
 
 Manual setup:
 

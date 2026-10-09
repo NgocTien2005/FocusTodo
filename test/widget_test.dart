@@ -599,4 +599,49 @@ void main() {
     expect(find.text('Old day'), findsNothing);
     expect(find.text('New day'), findsOneWidget);
   });
+
+  testWidgets(
+    'completion shows pending progress then removes the last active TODO',
+    (tester) async {
+      final store = MemoryDocumentStore();
+      await SharedPreferencesTodoRepository(store: store)
+          .createTodo(title: 'Finish me', createdAt: _now);
+      await _home(tester, store);
+      final checkbox = find.byKey(const ValueKey('complete-todo-1'));
+      expect(checkbox, findsOneWidget);
+      store.writeGate = Completer<void>();
+      await tester.tap(checkbox);
+      await tester.pump();
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+      store.writeGate!.complete();
+      await tester.pumpAndSettle();
+      expect(find.text('Finish me'), findsNothing);
+      expect(find.text('No active TODOs.'), findsOneWidget);
+      expect(find.text('Completed “Finish me”.'), findsOneWidget);
+      expect(
+        (await SharedPreferencesTodoRepository(
+          store: store,
+        ).loadTodos()).single.isCompleted,
+        isTrue,
+      );
+    },
+  );
+
+  testWidgets('completion failure retains the item and can be retried', (
+    tester,
+  ) async {
+    final store = MemoryDocumentStore();
+    await SharedPreferencesTodoRepository(store: store)
+        .createTodo(title: 'Retry me', createdAt: _now);
+    await _home(tester, store);
+    store.rejectWrite = true;
+    await tester.tap(find.byKey(const ValueKey('complete-todo-1')));
+    await tester.pumpAndSettle();
+    expect(find.text('Retry me'), findsOneWidget);
+    expect(find.textContaining('Could not complete TODO'), findsOneWidget);
+    store.rejectWrite = false;
+    await tester.tap(find.byKey(const ValueKey('complete-todo-1')));
+    await tester.pumpAndSettle();
+    expect(find.text('Retry me'), findsNothing);
+  });
 }

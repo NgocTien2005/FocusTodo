@@ -27,9 +27,11 @@ class TodoController extends ChangeNotifier {
   bool _loaded = false;
   bool _saving = false;
   bool _disposed = false;
+  final Set<String> _completingIds = {};
   String? _loadError;
   String? _saveError;
   Future<void>? _loadFuture;
+  Future<void> _operationTail = Future<void>.value();
 
   TodoCategory get category => _category;
   String get searchQuery => _searchQuery;
@@ -39,6 +41,7 @@ class TodoController extends ChangeNotifier {
   String? get loadError => _loadError;
   String? get saveError => _saveError;
   bool get canCreate => _loaded && !_loading && !_saving && _loadError == null;
+  bool isCompleting(String id) => _completingIds.contains(id);
   DateTime get currentTime => _clock();
   List<Todo> get activeTodos =>
       List.unmodifiable(_todos.where((todo) => !todo.isCompleted));
@@ -72,31 +75,37 @@ class TodoController extends ChangeNotifier {
       : null;
 
   Future<void> loadTodos() {
-    if (_saving) {
-      return Future.error(
-        StateError('Wait for the current save before loading TODOs.'),
-      );
-    }
     return _loadFuture ??= _load();
   }
 
-  Future<void> _load() async {
+  Future<void> _load() {
     _loading = true;
     _loadError = null;
     _notify();
-    try {
-      final todos = await repository.loadTodos();
-      if (!_disposed) {
-        _todos = List.of(todos);
-        _loaded = true;
+    return _enqueue(() async {
+      try {
+        final todos = await repository.loadTodos();
+        if (!_disposed) {
+          _todos = List.of(todos);
+          _loaded = true;
+        }
+      } catch (error) {
+        if (!_disposed) _loadError = error.toString();
+      } finally {
+        _loading = false;
+        _loadFuture = null;
+        _notify();
       }
-    } catch (error) {
-      if (!_disposed) _loadError = error.toString();
-    } finally {
-      _loading = false;
-      _loadFuture = null;
-      _notify();
-    }
+    });
+  }
+
+  Future<T> _enqueue<T>(Future<T> Function() operation) {
+    final result = _operationTail.then((_) => operation());
+    _operationTail = result.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    return result;
   }
 
   Future<Todo> createTodo({
@@ -116,13 +125,15 @@ class TodoController extends ChangeNotifier {
     _saveError = null;
     _notify();
     try {
-      final todo = await repository.createTodo(
-        title: title.trim(),
-        description: trimmedDescription == null || trimmedDescription.isEmpty
-            ? null
-            : trimmedDescription,
-        dueAt: dueAt,
-        createdAt: now,
+      final todo = await _enqueue(
+        () => repository.createTodo(
+          title: title.trim(),
+          description: trimmedDescription == null || trimmedDescription.isEmpty
+              ? null
+              : trimmedDescription,
+          dueAt: dueAt,
+          createdAt: now,
+        ),
       );
       if (!_disposed) _todos = [..._todos, todo];
       return todo;
@@ -131,6 +142,30 @@ class TodoController extends ChangeNotifier {
       rethrow;
     } finally {
       _saving = false;
+      _notify();
+    }
+  }
+
+  Future<Todo> completeTodo(String id) async {
+    if (!_loaded || _loading || _loadError != null) {
+      throw StateError('Load TODOs successfully before completing one.');
+    }
+    if (_completingIds.contains(id)) {
+      throw StateError('This TODO is already being completed.');
+    }
+    if (!_todos.any((todo) => todo.id == id && !todo.isCompleted)) {
+      throw TodoNotFoundException(id);
+    }
+    _completingIds.add(id);
+    _notify();
+    try {
+      final todo = await _enqueue(() => repository.completeTodo(id));
+      if (!_disposed) {
+        _todos = [for (final item in _todos) item.id == id ? todo : item];
+      }
+      return todo;
+    } finally {
+      _completingIds.remove(id);
       _notify();
     }
   }
