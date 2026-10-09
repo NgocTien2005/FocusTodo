@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
 import '../controllers/todo_controller.dart';
+import '../services/notification_service.dart';
 import '../widgets/empty_state.dart';
 import 'create_todo_screen.dart';
 
@@ -28,8 +31,110 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed && mounted) {
-      context.read<TodoController>().refreshDateSensitiveResults();
+      final controller = context.read<TodoController>();
+      controller.refreshDateSensitiveResults();
+      unawaited(controller.onAppResumed());
     }
+  }
+
+  Widget _reminderBanner(TodoController controller) {
+    final children = <Widget>[];
+    final permission = controller.reminderPermissionStatus;
+    if (controller.reminderInitializationError != null) {
+      children.add(const Text('Reminders could not be initialized.'));
+      children.add(
+        Text(
+          controller.reminderInitializationError!,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
+      );
+      children.add(
+        TextButton(
+          onPressed: controller.isReconcilingReminders
+              ? null
+              : controller.retryReminderReconciliation,
+          child: const Text('Retry reminders'),
+        ),
+      );
+    } else if (permission == ReminderPermissionStatus.notificationsDenied ||
+        permission == ReminderPermissionStatus.exactAlarmDenied) {
+      children.add(
+        Text(
+          permission == ReminderPermissionStatus.notificationsDenied
+              ? 'Notifications are disabled. Enable them to receive TODO reminders.'
+              : 'Exact alarm access is disabled. Reminders cannot be scheduled precisely.',
+        ),
+      );
+      children.add(
+        TextButton.icon(
+          onPressed: controller.isRequestingReminderPermissions
+              ? null
+              : controller.requestReminderPermissions,
+          icon: const Icon(Icons.notifications_active_outlined),
+          label: Text(
+            controller.isRequestingReminderPermissions
+                ? 'Checking permissions…'
+                : 'Enable reminders',
+          ),
+        ),
+      );
+    } else if (permission == ReminderPermissionStatus.unavailable) {
+      children.add(const Text('Scheduled reminders are available on Android.'));
+    }
+    if (controller.reminderReconciliationError != null) {
+      children.add(const Text('Some reminders could not be synchronized.'));
+      children.add(
+        TextButton(
+          onPressed: controller.isReconcilingReminders
+              ? null
+              : controller.retryReminderReconciliation,
+          child: const Text('Retry synchronization'),
+        ),
+      );
+    }
+    for (final entry in controller.reminderScheduleErrors.entries) {
+      children.add(
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                'TODO saved, but reminder could not be scheduled (${entry.key}).',
+              ),
+            ),
+            TextButton(
+              onPressed: () => controller.retryScheduleReminder(entry.key),
+              child: const Text('Retry'),
+            ),
+          ],
+        ),
+      );
+    }
+    for (final warning in controller.reminderCancellationWarnings) {
+      children.add(
+        Row(
+          children: [
+            Expanded(
+              child: Text('Could not cancel reminder for ${warning.title}.'),
+            ),
+            TextButton(
+              onPressed: () => controller.retryCancellation(warning),
+              child: const Text('Retry'),
+            ),
+          ],
+        ),
+      );
+    }
+    if (children.isEmpty) return const SizedBox.shrink();
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: children,
+        ),
+      ),
+    );
   }
 
   @override
@@ -212,6 +317,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   border: const OutlineInputBorder(),
                 ),
               ),
+              _reminderBanner(controller),
               Expanded(child: _content(controller)),
               FilledButton.icon(
                 onPressed: controller.canCreate

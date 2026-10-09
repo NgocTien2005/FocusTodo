@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
 import '../controllers/todo_controller.dart';
+import '../services/notification_service.dart';
 
 class CreateTodoScreen extends StatefulWidget {
   const CreateTodoScreen({super.key});
@@ -19,6 +20,9 @@ class _CreateTodoScreenState extends State<CreateTodoScreen> {
   TimeOfDay? _time;
   String? _dueError;
   String? _saveError;
+  String? _savedTodoId;
+  String? _reminderError;
+  bool _noAdvanceNotice = false;
   bool _submitting = false;
 
   Future<void> _pickDate() async {
@@ -56,7 +60,7 @@ class _CreateTodoScreenState extends State<CreateTodoScreen> {
 
   Future<void> _submit() async {
     final controller = context.read<TodoController>();
-    if (_submitting || controller.isSaving) return;
+    if (_submitting || controller.isSaving || _savedTodoId != null) return;
     final validTitle = _form.currentState!.validate();
     DateTime? dueAt;
     String? dueError;
@@ -88,17 +92,54 @@ class _CreateTodoScreenState extends State<CreateTodoScreen> {
     if (!validTitle || dueError != null) return;
     setState(() => _submitting = true);
     try {
-      await controller.createTodo(
+      final saved = await controller.createTodo(
         title: _title.text,
         description: _description.text,
         dueAt: dueAt,
       );
       if (!mounted) return;
+      final reminderError = controller.reminderScheduleError(saved.id);
+      final noAdvanceNotice = controller.reminderHasNoAdvanceNotice(saved.id);
+      if (reminderError != null || noAdvanceNotice) {
+        setState(() {
+          _savedTodoId = saved.id;
+          _reminderError = reminderError;
+          _noAdvanceNotice = noAdvanceNotice;
+        });
+        return;
+      }
       FocusScope.of(context).unfocus();
       Navigator.of(context).pop();
     } catch (error) {
       if (!mounted) return;
       setState(() => _saveError = error.toString());
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
+
+  Future<void> _retryReminder() async {
+    final todoId = _savedTodoId;
+    if (todoId == null || _submitting) return;
+    final controller = context.read<TodoController>();
+    setState(() => _submitting = true);
+    try {
+      if (controller.reminderPermissionStatus !=
+          ReminderPermissionStatus.enabled) {
+        await controller.requestReminderPermissions();
+      } else {
+        await controller.retryScheduleReminder(todoId);
+      }
+      if (!mounted) return;
+      final error = controller.reminderScheduleError(todoId);
+      if (error == null) {
+        FocusScope.of(context).unfocus();
+        Navigator.of(context).pop();
+      } else {
+        setState(() => _reminderError = error);
+      }
+    } catch (error) {
+      if (mounted) setState(() => _reminderError = error.toString());
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
@@ -130,7 +171,7 @@ class _CreateTodoScreenState extends State<CreateTodoScreen> {
                   TextFormField(
                     key: const Key('todo-title'),
                     controller: _title,
-                    enabled: !saving,
+                    enabled: !saving && _savedTodoId == null,
                     textCapitalization: TextCapitalization.sentences,
                     textInputAction: TextInputAction.next,
                     validator: (value) =>
@@ -144,7 +185,7 @@ class _CreateTodoScreenState extends State<CreateTodoScreen> {
                   TextFormField(
                     key: const Key('todo-description'),
                     controller: _description,
-                    enabled: !saving,
+                    enabled: !saving && _savedTodoId == null,
                     minLines: 2,
                     maxLines: 5,
                     decoration: const InputDecoration(
@@ -160,7 +201,9 @@ class _CreateTodoScreenState extends State<CreateTodoScreen> {
                   const SizedBox(height: 8),
                   OutlinedButton.icon(
                     key: const Key('pick-date'),
-                    onPressed: saving ? null : _pickDate,
+                    onPressed: saving || _savedTodoId != null
+                        ? null
+                        : _pickDate,
                     icon: const Icon(Icons.calendar_today),
                     label: Text(
                       _date == null
@@ -170,7 +213,9 @@ class _CreateTodoScreenState extends State<CreateTodoScreen> {
                   ),
                   OutlinedButton.icon(
                     key: const Key('pick-time'),
-                    onPressed: saving ? null : _pickTime,
+                    onPressed: saving || _savedTodoId != null
+                        ? null
+                        : _pickTime,
                     icon: const Icon(Icons.schedule),
                     label: Text(
                       _time == null ? 'Choose time' : _time!.format(context),
@@ -178,7 +223,7 @@ class _CreateTodoScreenState extends State<CreateTodoScreen> {
                   ),
                   if (_date != null || _time != null)
                     TextButton(
-                      onPressed: saving
+                      onPressed: saving || _savedTodoId != null
                           ? null
                           : () => setState(() {
                               _date = null;
@@ -199,8 +244,36 @@ class _CreateTodoScreenState extends State<CreateTodoScreen> {
                       ),
                     ),
                   ],
-                  const SizedBox(height: 16),
-                  const Text('Reminder scheduling is coming next.'),
+                  if (_savedTodoId != null) ...[
+                    const SizedBox(height: 16),
+                    if (_reminderError != null) ...[
+                      const Text(
+                        'TODO saved, but reminder could not be scheduled.',
+                        key: Key('reminder-save-warning'),
+                      ),
+                      Text(
+                        _reminderError!,
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.error,
+                        ),
+                      ),
+                      FilledButton.tonal(
+                        key: const Key('retry-reminder'),
+                        onPressed: saving ? null : _retryReminder,
+                        child: const Text('Retry reminder'),
+                      ),
+                    ] else if (_noAdvanceNotice)
+                      const Text(
+                        'TODO saved. A full 10-minute advance reminder is unavailable because it is due too soon.',
+                        key: Key('no-advance-reminder'),
+                      ),
+                    OutlinedButton(
+                      onPressed: saving
+                          ? null
+                          : () => Navigator.of(context).pop(),
+                      child: const Text('Back to TODOs'),
+                    ),
+                  ],
                   if (_saveError != null) ...[
                     const SizedBox(height: 16),
                     Text(
@@ -212,11 +285,12 @@ class _CreateTodoScreenState extends State<CreateTodoScreen> {
                     ),
                   ],
                   const SizedBox(height: 24),
-                  FilledButton(
-                    key: const Key('save-todo'),
-                    onPressed: saving ? null : _submit,
-                    child: Text(saving ? 'Saving…' : 'Save TODO'),
-                  ),
+                  if (_savedTodoId == null)
+                    FilledButton(
+                      key: const Key('save-todo'),
+                      onPressed: saving ? null : _submit,
+                      child: Text(saving ? 'Saving…' : 'Save TODO'),
+                    ),
                 ],
               ),
             ),

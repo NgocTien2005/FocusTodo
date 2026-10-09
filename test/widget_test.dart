@@ -6,9 +6,11 @@ import 'package:focus_todo/app.dart';
 import 'package:focus_todo/controllers/todo_controller.dart';
 import 'package:focus_todo/models/todo.dart';
 import 'package:focus_todo/repositories/shared_preferences_todo_repository.dart';
+import 'package:focus_todo/services/notification_service.dart';
 import 'package:provider/provider.dart';
 
 import 'support/memory_document_store.dart';
+import 'support/memory_notification_service.dart';
 
 final _now = DateTime(2026, 10, 7, 12);
 const _titleKey = Key('todo-title');
@@ -51,10 +53,13 @@ Future<void> _home(
   WidgetTester tester,
   MemoryDocumentStore store, {
   TodoClock? clock,
+  MemoryNotificationService? notifications,
 }) async {
   await tester.pumpWidget(
     FocusTodoApp(
       repository: SharedPreferencesTodoRepository(store: store),
+      notificationService: notifications ?? MemoryNotificationService()
+        ..now = _now,
       clock: clock ?? () => _now,
     ),
   );
@@ -81,7 +86,12 @@ Future<void> _date(WidgetTester tester, String day) async {
   await tester.pumpAndSettle();
 }
 
-Future<void> _time(WidgetTester tester, String hour, String minute) async {
+Future<void> _time(
+  WidgetTester tester,
+  String hour,
+  String minute, {
+  String period = 'AM',
+}) async {
   await tester.ensureVisible(find.byKey(const Key('pick-time')));
   await tester.tap(find.byKey(const Key('pick-time')));
   await tester.pumpAndSettle();
@@ -93,8 +103,8 @@ Future<void> _time(WidgetTester tester, String hour, String minute) async {
   );
   await tester.enterText(fields.at(0), hour);
   await tester.enterText(fields.at(1), minute);
-  if (find.text('AM').evaluate().isNotEmpty) {
-    await tester.tap(find.text('AM').last);
+  if (find.text(period).evaluate().isNotEmpty) {
+    await tester.tap(find.text(period).last);
   }
   await tester.tap(find.text('OK'));
   await tester.pumpAndSettle();
@@ -482,6 +492,7 @@ void main() {
     await tester.pumpWidget(
       FocusTodoApp(
         repository: SharedPreferencesTodoRepository(store: store),
+        notificationService: MemoryNotificationService()..now = _now,
         clock: () => _now,
       ),
     );
@@ -643,5 +654,148 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('complete-todo-1')));
     await tester.pumpAndSettle();
     expect(find.text('Retry me'), findsNothing);
+  });
+
+  testWidgets('Enable reminders requests permissions and reconciles TODOs', (
+    tester,
+  ) async {
+    final store = MemoryDocumentStore();
+    final todo = await SharedPreferencesTodoRepository(store: store).createTodo(
+      title: 'Permission reminder',
+      dueAt: _now.add(const Duration(hours: 1)),
+      createdAt: _now,
+    );
+    final notifications = MemoryNotificationService()
+      ..now = _now
+      ..permissionStatus = ReminderPermissionStatus.notificationsDenied
+      ..requestedStatus = ReminderPermissionStatus.enabled;
+    await _home(tester, store, notifications: notifications);
+    expect(
+      find.text(
+        'Notifications are disabled. Enable them to receive TODO reminders.',
+      ),
+      findsOneWidget,
+    );
+    expect(notifications.pending, isEmpty);
+    await tester.tap(find.text('Enable reminders'));
+    await tester.pumpAndSettle();
+    expect(notifications.permissionRequests, 1);
+    expect(notifications.pending[todo.notificationId]?.payload, todo.id);
+    expect(find.text('Enable reminders'), findsNothing);
+  });
+
+  testWidgets(
+    'initialization failure leaves TODOs visible and can be retried',
+    (tester) async {
+      final store = MemoryDocumentStore();
+      await SharedPreferencesTodoRepository(store: store)
+          .createTodo(title: 'Still manageable', createdAt: _now);
+      final notifications = MemoryNotificationService()
+        ..now = _now
+        ..failInitialize = true;
+      await _home(tester, store, notifications: notifications);
+      expect(find.text('Still manageable'), findsOneWidget);
+      expect(find.text('Reminders could not be initialized.'), findsOneWidget);
+      notifications.failInitialize = false;
+      await tester.tap(find.text('Retry reminders'));
+      await tester.pumpAndSettle();
+      expect(find.text('Reminders could not be initialized.'), findsNothing);
+      expect(find.text('Still manageable'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'saved TODO reminder failure is retryable without duplicate creation',
+    (tester) async {
+      final store = MemoryDocumentStore();
+      final notifications = MemoryNotificationService()
+        ..now = _now
+        ..failSchedule = true;
+      await _home(tester, store, notifications: notifications);
+      await _openForm(tester);
+      await tester.enterText(find.byKey(_titleKey), 'Retry scheduled reminder');
+      await _date(tester, '7');
+      await _time(tester, '1', '30', period: 'PM');
+      await _save(tester);
+      expect(
+        find.text('TODO saved, but reminder could not be scheduled.'),
+        findsOneWidget,
+      );
+      expect(store.writes, 1);
+      final saved = (await SharedPreferencesTodoRepository(
+        store: store,
+      ).loadTodos()).single;
+      notifications.failSchedule = false;
+      await tester.ensureVisible(find.byKey(const Key('retry-reminder')));
+      await tester.tap(find.byKey(const Key('retry-reminder')));
+      await tester.pumpAndSettle();
+      expect(find.text('FocusTodo'), findsOneWidget);
+      expect(store.writes, 1);
+      expect(notifications.scheduledTodos.map((todo) => todo.notificationId), [
+        saved.notificationId,
+        saved.notificationId,
+      ]);
+      expect(notifications.pending[saved.notificationId]?.payload, saved.id);
+    },
+  );
+
+  testWidgets(
+    'TODO due in under ten minutes is saved without an immediate reminder',
+    (tester) async {
+      final store = MemoryDocumentStore();
+      final notifications = MemoryNotificationService()..now = _now;
+      await _home(tester, store, notifications: notifications);
+      await _openForm(tester);
+      await tester.enterText(find.byKey(_titleKey), 'Due very soon');
+      await _date(tester, '7');
+      await _time(tester, '12', '05', period: 'PM');
+      await _save(tester);
+      expect(find.byKey(const Key('no-advance-reminder')), findsOneWidget);
+      expect(store.writes, 1);
+      expect(notifications.scheduledTodos, isEmpty);
+      expect(
+        await SharedPreferencesTodoRepository(store: store).loadTodos(),
+        hasLength(1),
+      );
+    },
+  );
+
+  testWidgets('cancellation warning stays on Home and retry clears it', (
+    tester,
+  ) async {
+    final store = MemoryDocumentStore();
+    final todo = await SharedPreferencesTodoRepository(store: store).createTodo(
+      title: 'Cancel reminder',
+      dueAt: _now.add(const Duration(hours: 1)),
+      createdAt: _now,
+    );
+    final notifications = MemoryNotificationService()..now = _now;
+    await _home(tester, store, notifications: notifications);
+    notifications.failCancel = true;
+    await tester.tap(find.byKey(const ValueKey('complete-todo-1')));
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Could not cancel reminder for Cancel reminder.'),
+      findsOneWidget,
+    );
+    expect(
+      (await SharedPreferencesTodoRepository(
+        store: store,
+      ).loadTodos()).single.isCompleted,
+      isTrue,
+    );
+    notifications.failCancel = false;
+    await tester.tap(find.text('Retry'));
+    await tester.pumpAndSettle();
+    expect(notifications.cancelledIds, [
+      todo.notificationId,
+      todo.notificationId,
+    ]);
+    expect(_controller(tester).reminderCancellationWarnings, isEmpty);
+    expect(notifications.pending.containsKey(todo.notificationId), isFalse);
+    expect(
+      find.text('Could not cancel reminder for Cancel reminder.'),
+      findsNothing,
+    );
   });
 }
