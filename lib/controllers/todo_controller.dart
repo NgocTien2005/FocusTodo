@@ -183,6 +183,11 @@ class TodoController extends ChangeNotifier {
     if (!_hasAdvanceNotice(todo)) {
       _noAdvanceReminderIds.add(todo.id);
       _reminderScheduleErrors.remove(todo.id);
+      await _cancelReminderLocked(
+        notificationId: todo.notificationId,
+        todoId: todo.id,
+        title: todo.title,
+      );
       _notify();
       return;
     }
@@ -201,6 +206,11 @@ class TodoController extends ChangeNotifier {
       final result = await notificationService.scheduleReminder(todo);
       if (result == ReminderScheduleResult.noAdvanceNotice) {
         _noAdvanceReminderIds.add(todo.id);
+        await _cancelReminderLocked(
+          notificationId: todo.notificationId,
+          todoId: todo.id,
+          title: todo.title,
+        );
       } else {
         _noAdvanceReminderIds.remove(todo.id);
       }
@@ -247,6 +257,9 @@ class TodoController extends ChangeNotifier {
   }
 
   Future<void> _reconcileRemindersLocked(List<Todo> todos) async {
+    // Reconciliation may cancel platform alarms, so only use an authoritative
+    // snapshot obtained from a successful storage load.
+    if (!_loaded || _loading || _loadError != null) return;
     _reconcilingReminders = true;
     _reminderReconciliationError = null;
     _notify();
@@ -254,6 +267,10 @@ class TodoController extends ChangeNotifier {
       final permission = await _initializeAndCheckPermission();
       if (permission == null) return;
       final pending = await notificationService.pendingReminders();
+      final pendingIds = pending.map((reminder) => '${reminder.id}').toSet();
+      _reminderCancellationWarnings.removeWhere(
+        (notificationId, _) => !pendingIds.contains(notificationId),
+      );
       final byNotificationId = {
         for (final todo in todos) todo.notificationId: todo,
       };
@@ -333,6 +350,7 @@ class TodoController extends ChangeNotifier {
   }
 
   Future<void> retryReminderReconciliation() => _enqueue(() async {
+    if (!_loaded || _loading || _loadError != null) return;
     await _reconcileRemindersLocked(_todos);
   });
 

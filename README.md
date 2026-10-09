@@ -6,15 +6,11 @@ Deadline: **11 October 2026**.
 
 ## Scope and interpretation
 
-The assignment says “console-based” but requires Flutter local notifications. We assume a simple Flutter Android mobile application. **Ask the instructor to clarify this assumption before implementing further features.** No terminal-style UI or separate CLI is planned.
+This Flutter Android app implements the assignment's six requirements: dated TODO creation, All/Today/Upcoming categories, category filtering, search, reminders ten minutes before due time, and completion removal from active lists. Each requirement has automated coverage; actual Android interaction and timed reminder delivery remain separate device checks recorded below.
 
-The six requirements are dated/timed TODO creation, All/Today/Upcoming categories, category filtering, search, notifications ten minutes before due time, and completion removal from active lists. TODO creation/storage from PR #1 is merged; this feature adds search to the existing category lists.
+The app supports descriptions and undated TODOs, validates blank titles and past due times, and stores records locally in SharedPreferences. Completed TODOs stay in storage, disappear from active results, and have their reminder canceled. No sample data is created. Editing, deletion, completed history, cloud sync, and undo are outside this assignment scope.
 
-Implemented: validated TODO creation with an optional description and local date/time pickers; clearing the due time; SharedPreferences persistence and startup loading/retry; stable TODO/notification IDs; All/Today/Upcoming filtering; local due-time display; completed-item exclusion; and loading/error/empty/list states. The scrollable form rejects blank titles, incomplete date/time selections and past due times, disables Save during a write, retains input on storage failure, and closes only after persistence succeeds. Categories refresh when the app resumes.
-
-Implemented: durable completion with a checkbox on each active TODO and a scheduled reminder ten minutes before an eligible due time. Completion persists first, then cancels the reminder. Startup and resume reconcile pending reminders against stored TODOs. Notification permission and exact-alarm access are requested only after the user taps Enable reminders. No sample data is created by the app.
-
-Pending: Android delivery verification on an online device, and editing/deletion remain future work. If a persisted TODO's reminder cannot be scheduled, the TODO remains saved and can be retried without creating a duplicate. If cancellation fails, the completed record remains completed and Home keeps a retryable warning. TODOs due in less than ten minutes are saved without a late/immediate reminder, with an explanation that a full ten-minute advance reminder is unavailable.
+Reminders require notification permission and exact-alarm access, requested from **Enable reminders**. A scheduling failure keeps the saved TODO and can be retried with the same ID. A cancellation failure keeps completion persisted and displays a retryable Home warning. TODOs due in less than ten minutes are saved without a late/immediate alert.
 
 ## Search
 
@@ -80,11 +76,11 @@ flutter analyze
 flutter test
 flutter build apk --debug
 flutter devices
-flutter emulators --launch Pixel_9
-flutter run -d emulator-5554
+flutter emulators
+flutter run -d <online-android-device-id>
 ```
 
-`Pixel_9` is the currently configured AVD. Wait for it to boot and confirm its ID with `flutter devices`; substitute that ID if it differs from `emulator-5554`. Do not select a Windows/browser target for this assignment. To connect a phone, enable Developer options and USB debugging, connect USB, approve the phone's debugging prompt, and install the OEM USB driver if needed.
+`Pixel_9` is the configured AVD. Confirm that it is online in `flutter devices` before using it. To connect a phone, enable Developer options and USB debugging, connect USB, and approve the phone's debugging prompt. On this machine `adb` is at `C:\Users\LENOVO\AppData\Local\Android\sdk\platform-tools\adb.exe` and is not on PATH. Flutter currently reports missing Android command-line tools and unknown Android license status; install those tools and review/accept licenses through Android Studio before relying on a local Android toolchain setup.
 
 ## Manual feature checks on Android
 
@@ -105,14 +101,14 @@ Storage-failure retention and corrupted-data recovery are covered by automated t
 
 ## Six-requirement status
 
-| Requirement | Implemented | Device verified |
+| Requirement | Implemented | Automated evidence | Device verified |
 | --- | --- | --- |
-| Dated TODO creation | Yes; date/time validation and persistence | No |
-| All/Today/Upcoming categories | Yes; local calendar boundaries | No |
-| Category filtering | Yes | No |
-| Search | Yes; combines with categories | No |
-| Reminder ten minutes before due | Yes; exact Android alarm path, permissions and reconciliation | No; requires an online Android device and timed delivery observation |
-| Completion removes active TODO | Yes; persists completion and cancels reminder with retry warning | No |
+| Dated TODO creation | Yes; date/time validation and persistence | Widget, repository and validation tests | Not yet |
+| All/Today/Upcoming categories | Yes; local calendar boundaries | Controller and lifecycle/widget tests | Not yet |
+| Category filtering | Yes | Controller/widget tests, including combined search | Not yet |
+| Search | Yes; combines with categories | Controller/widget tests | Not yet |
+| Reminder ten minutes before due | Yes; exact Android alarm path, permissions and reconciliation | Service/controller/widget tests; does not prove OS delivery | Not yet |
+| Completion removes active TODO | Yes; persists completion and cancels reminder with retry warning | Repository/controller/widget tests | Not yet |
 
 ## Notifications and platform limitations
 
@@ -161,7 +157,9 @@ Completion verification on **9 October 2026**, on `feature/todo-completion`: `da
 
 Reminder verification on **9 October 2026**, on `feature/todo-reminders`: `dart format lib test` succeeded; `flutter analyze` completed with **no issues**; `flutter test` passed **all 72 tests**; `flutter build apk --debug` succeeded and produced `build/app/outputs/flutter-apk/app-debug.apk`. Tests cover the reminder instant/UTC conversion, eligibility, permissions and initialization errors, partial scheduling and retry, stable IDs, completion cancellation/retry, reconciliation, load failures and scheduling/completion races. These automated checks do not verify Android alarm delivery.
 
-**Android reminder delivery remains unverified.** `Pixel_9` remained `emulator-5554 offline`; it was not wiped. A connected Android 16/API 36 phone (`GERW7DMFTGW4FATC`) was found and the debug app installation/launch was attempted. The phone's foreground remained `com.facebook.orca`'s `InCallActivity` (Messenger call), so no UI interaction or timed-notification test was performed. No notification permission flow, 11–12 minute timed delivery, completion cancellation on device, restart persistence, or reboot restoration is claimed. Use the manual checks above when an available device can be used without interrupting an active call. Dismissing from Recents is not force-stop; Android Force stop suppresses scheduled app work until the app is started again.
+**Android reminder delivery remains unverified.** On **9 October 2026**, `flutter doctor -v` and `flutter devices` identified phone model **2406APNFAG**, Android **16 / API 36**, serial `GERW7DMFTGW4FATC`, as online. The foreground was `com.facebook.orca`'s `InCallActivity` (Messenger call); no app install, launch, UI interaction, or notification test was done during that call. Pixel_9 appeared as `emulator-5554 offline`. A normal launch failed because an emulator process already held the AVD; a direct non-destructive cold boot with `-no-snapshot-load` also failed with “Running multiple emulators with the same AVD”. The emulator was not wiped or terminated. No app data was cleared. No permission flow, six-requirement device check, 11–12 minute delivery, cancellation alert observation, restart persistence, or reboot restoration is claimed. Dismissing from Recents is not Force stop; do not force-stop when observing delivery.
+
+Final verification on `fix/android-final-verification`, **9 October 2026**: `dart format lib test` succeeded; `flutter analyze` found no issues; `flutter test` passed **78 tests** after targeted regressions were added; `flutter build apk --debug` succeeded at `build/app/outputs/flutter-apk/app-debug.apk`. Confirmed fixes recheck reminder eligibility immediately before platform scheduling, cancel stale alarms when the controller receives `noAdvanceNotice`, prevent reconciliation until storage has loaded successfully, and clear cancellation warnings once reconciliation confirms an alarm is absent. Tests also cover initialization errors separately from storage load errors and permission reconciliation on resume. The exact expected/observed reminder times are **not available** because no eligible TODO was created on a device and no OS notification was observed.
 
 Manual setup:
 
@@ -169,5 +167,7 @@ Manual setup:
 2. Reopen PowerShell and run `flutter doctor --android-licenses`; read each license and decide whether to accept it. **This setup did not accept SDK licenses.** Then run `flutter doctor -v`.
 3. Start **Pixel_9** with `flutter emulators --launch Pixel_9` or Device Manager, or connect/authorize a USB-debugging Android phone. Check `flutter devices`.
 4. Run `flutter build apk --debug`, then `flutter run` from this workspace once one Android device is available.
+
+For the remaining device checks, first make the Android 16 phone available without an active call. Install the APK with `adb install -r` (no `pm clear`, uninstall, or data reset), launch FocusTodo, and use uniquely named TODOs such as `VERIFY-UNDATED`, `VERIFY-TODAY`, `VERIFY-UPCOMING`, and `VERIFY-CANCEL`. Follow the 12-step checklist above. Record the phone's displayed timezone, TODO due time, persisted notification ID, expected `dueAt - 10 minutes` trigger, and observed notification time. Remove test TODOs only through the app if a supported removal operation becomes available; this version has no delete flow, so test records may remain in app storage. Record exactly which titles remain.
 
 The project uses the existing Git repository. Track `pubspec.lock` alongside application source.

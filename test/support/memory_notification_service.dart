@@ -20,6 +20,8 @@ class MemoryNotificationService implements NotificationService {
   final Map<int, PendingReminder> pending = {};
   Completer<void>? scheduleGate;
   Completer<void>? scheduleStarted;
+  Completer<void>? permissionGate;
+  Completer<void>? permissionCheckStarted;
   Completer<void>? cancelGate;
 
   @override
@@ -29,8 +31,14 @@ class MemoryNotificationService implements NotificationService {
   }
 
   @override
-  Future<ReminderPermissionStatus> checkPermissionStatus() async =>
-      permissionStatus;
+  Future<ReminderPermissionStatus> checkPermissionStatus() async {
+    if (permissionCheckStarted != null &&
+        !permissionCheckStarted!.isCompleted) {
+      permissionCheckStarted!.complete();
+    }
+    await permissionGate?.future;
+    return permissionStatus;
+  }
 
   @override
   Future<ReminderPermissionStatus> requestPermissions() async {

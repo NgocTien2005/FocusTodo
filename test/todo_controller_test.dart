@@ -559,6 +559,108 @@ void main() {
     expect(notifications.pending.containsKey(9), isTrue);
   });
 
+  test(
+    'retry reconciliation is inert until storage loads successfully',
+    () async {
+      store.failRead = true;
+      notifications.pending[9] = const PendingReminder(id: 9, payload: 'saved');
+      await controller.loadTodos();
+      await controller.retryReminderReconciliation();
+
+      expect(controller.loadError, isNotNull);
+      expect(notifications.cancelledIds, isEmpty);
+      expect(notifications.pending.containsKey(9), isTrue);
+    },
+  );
+
+  test(
+    'initialization failure does not become a storage load failure',
+    () async {
+      await SharedPreferencesTodoRepository(store: store)
+          .createTodo(title: 'Still visible', createdAt: now);
+      notifications.failInitialize = true;
+
+      await controller.loadTodos();
+
+      expect(controller.loadError, isNull);
+      expect(controller.reminderInitializationError, contains('init failed'));
+      expect(controller.activeTodos.map((todo) => todo.title), [
+        'Still visible',
+      ]);
+    },
+  );
+
+  test(
+    'reconciliation clears cancellation warning when alarm is already gone',
+    () async {
+      final repository = SharedPreferencesTodoRepository(store: store);
+      final todo = await repository.createTodo(
+        title: 'Completed reminder',
+        dueAt: now.add(const Duration(hours: 1)),
+        createdAt: now,
+      );
+      await controller.loadTodos();
+      notifications.failCancel = true;
+      await controller.completeTodo(todo.id);
+      expect(controller.reminderCancellationWarnings, hasLength(1));
+
+      notifications.failCancel = false;
+      notifications.pending.remove(todo.notificationId);
+      await controller.retryReminderReconciliation();
+
+      expect(controller.reminderCancellationWarnings, isEmpty);
+    },
+  );
+
+  test(
+    'permission recheck after resume reconciles eligible reminders',
+    () async {
+      final repository = SharedPreferencesTodoRepository(store: store);
+      final todo = await repository.createTodo(
+        title: 'Permission returned',
+        dueAt: now.add(const Duration(hours: 1)),
+        createdAt: now,
+      );
+      notifications.permissionStatus =
+          ReminderPermissionStatus.notificationsDenied;
+      await controller.loadTodos();
+      expect(notifications.pending, isEmpty);
+
+      notifications.permissionStatus = ReminderPermissionStatus.enabled;
+      await controller.onAppResumed();
+
+      expect(
+        controller.reminderPermissionStatus,
+        ReminderPermissionStatus.enabled,
+      );
+      expect(notifications.pending[todo.notificationId]?.payload, todo.id);
+    },
+  );
+
+  test(
+    'late no-advance result is surfaced and any old alarm is canceled',
+    () async {
+      await controller.loadTodos();
+      notifications.scheduleGate = Completer<void>();
+      notifications.scheduleStarted = Completer<void>();
+      final creating = controller.createTodo(
+        title: 'Notice elapsed while scheduling',
+        dueAt: now.add(const Duration(minutes: 11)),
+      );
+      await notifications.scheduleStarted!.future;
+      final todo = controller.activeTodos.single;
+      notifications.now = now.add(const Duration(minutes: 2));
+      notifications.scheduleGate!.complete();
+
+      await creating;
+
+      expect(controller.reminderHasNoAdvanceNotice(todo.id), isTrue);
+      expect(controller.reminderScheduleError(todo.id), isNull);
+      expect(notifications.pending, isEmpty);
+      expect(notifications.cancelledIds, [todo.notificationId]);
+    },
+  );
+
   test('serialized create scheduling followed by completion cannot leave a pending reminder', () async {
     await controller.loadTodos();
     notifications.scheduleGate = Completer<void>();
