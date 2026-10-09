@@ -8,6 +8,7 @@ import 'package:focus_todo/repositories/todo_repository.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'support/memory_document_store.dart';
+import 'support/memory_notification_service.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -34,7 +35,11 @@ void main() {
       );
       final undated = await first.createTodo(title: 'Undated', createdAt: now);
       final fresh = SharedPreferencesTodoRepository();
-      final controller = TodoController(repository: fresh, clock: () => now);
+      final controller = TodoController(
+        repository: fresh,
+        notificationService: MemoryNotificationService()..now = now,
+        clock: () => now,
+      );
       addTearDown(controller.dispose);
       await controller.loadTodos();
       expect(controller.loadError, isNull);

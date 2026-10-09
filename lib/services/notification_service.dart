@@ -1,13 +1,32 @@
 import '../models/todo.dart';
 
-/// Contract only: plugin integration and runtime permissions are coming next.
-/// Initialization must obtain the device timezone before scheduling.
+const reminderLeadTime = Duration(minutes: 10);
+
+DateTime reminderInstantFor(Todo todo) =>
+    todo.dueAt!.toUtc().subtract(reminderLeadTime);
+
+enum ReminderPermissionStatus {
+  enabled,
+  notificationsDenied,
+  exactAlarmDenied,
+  unavailable,
+}
+
+enum ReminderScheduleResult { scheduled, completed, undated, noAdvanceNotice }
+
+class PendingReminder {
+  const PendingReminder({required this.id, this.payload});
+
+  final int id;
+  final String? payload;
+}
+
+/// Platform reminder contract. Permission requests must only follow user action.
 abstract interface class NotificationService {
   Future<void> initialize();
-  Future<bool> requestPermissions();
-
-  /// Schedule dueAt minus ten minutes; reject past reminders and undated TODOs.
-  /// Reuse the persisted notificationId. Surface permission/scheduling failures.
-  Future<void> scheduleReminder(Todo todo);
+  Future<ReminderPermissionStatus> checkPermissionStatus();
+  Future<ReminderPermissionStatus> requestPermissions();
+  Future<ReminderScheduleResult> scheduleReminder(Todo todo);
   Future<void> cancelReminder(int notificationId);
+  Future<List<PendingReminder>> pendingReminders();
 }

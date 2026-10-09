@@ -4,17 +4,22 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:focus_todo/controllers/todo_controller.dart';
 import 'package:focus_todo/models/todo.dart';
 import 'package:focus_todo/repositories/shared_preferences_todo_repository.dart';
+import 'package:focus_todo/services/notification_service.dart';
 
 import 'support/memory_document_store.dart';
+import 'support/memory_notification_service.dart';
 
 void main() {
   final now = DateTime(2026, 10, 7, 12);
   late MemoryDocumentStore store;
+  late MemoryNotificationService notifications;
   late TodoController controller;
   setUp(() {
     store = MemoryDocumentStore();
+    notifications = MemoryNotificationService()..now = now;
     controller = TodoController(
       repository: SharedPreferencesTodoRepository(store: store),
+      notificationService: notifications,
       clock: () => now,
     );
   });
@@ -167,6 +172,7 @@ void main() {
         controller.setSearchQuery('read');
         final restarted = TodoController(
           repository: repository,
+          notificationService: MemoryNotificationService()..now = now,
           clock: () => now,
         );
         addTearDown(restarted.dispose);
@@ -295,7 +301,11 @@ void main() {
       item('Undated', null, 6),
       item('Completed', DateTime(2026, 10, 7), 7, completed: true),
     ]);
-    final local = TodoController(repository: repository, clock: () => clock);
+    final local = TodoController(
+      repository: repository,
+      notificationService: MemoryNotificationService()..now = clock,
+      clock: () => clock,
+    );
     addTearDown(local.dispose);
     await local.loadTodos();
     expect(local.visibleTodos.length, 7);
@@ -437,5 +447,138 @@ void main() {
     final persisted = await repository.loadTodos();
     expect(persisted.length, 2);
     expect(persisted.first.isCompleted, isTrue);
+  });
+
+  test(
+    'schedule failure keeps the saved TODO and retry reuses its ID',
+    () async {
+      await controller.loadTodos();
+      notifications.failSchedule = true;
+      final todo = await controller.createTodo(
+        title: 'Save before reminder',
+        dueAt: now.add(const Duration(hours: 1)),
+      );
+      expect(controller.activeTodos.single.id, todo.id);
+      expect(controller.reminderScheduleError(todo.id), isNotNull);
+      expect(store.writes, 1);
+      notifications.failSchedule = false;
+      await controller.retryScheduleReminder(todo.id);
+      expect(controller.reminderScheduleError(todo.id), isNull);
+      expect(notifications.scheduledTodos.map((item) => item.notificationId), [
+        todo.notificationId,
+        todo.notificationId,
+      ]);
+      expect(
+        (await SharedPreferencesTodoRepository(
+          store: store,
+        ).loadTodos()).single.id,
+        todo.id,
+      );
+      expect(store.writes, 1);
+    },
+  );
+
+  test(
+    'completion persists before cancellation and exposes cancellation retry',
+    () async {
+      final repository = SharedPreferencesTodoRepository(store: store);
+      final todo = await repository.createTodo(
+        title: 'Cancel when done',
+        dueAt: now.add(const Duration(hours: 1)),
+        createdAt: now,
+      );
+      await controller.loadTodos();
+      expect(notifications.pending.containsKey(todo.notificationId), isTrue);
+      notifications.failCancel = true;
+      await controller.completeTodo(todo.id);
+      expect((await repository.loadTodos()).single.isCompleted, isTrue);
+      expect(controller.activeTodos, isEmpty);
+      expect(controller.reminderCancellationWarnings, hasLength(1));
+      notifications.failCancel = false;
+      await controller.retryCancellation(
+        controller.reminderCancellationWarnings.single,
+      );
+      expect(notifications.pending.containsKey(todo.notificationId), isFalse);
+      expect(controller.reminderCancellationWarnings, isEmpty);
+    },
+  );
+
+  test('startup reconciliation removes stale reminders and creates missing eligible ones', () async {
+    final repository = SharedPreferencesTodoRepository(store: store);
+    await repository.saveTodos([
+      Todo(
+        id: 'kept',
+        title: 'Keep pending',
+        dueAt: now.add(const Duration(hours: 2)),
+        createdAt: now,
+        notificationId: 10,
+      ),
+      Todo(
+        id: 'schedule',
+        title: 'Needs a reminder',
+        dueAt: now.add(const Duration(hours: 3)),
+        createdAt: now,
+        notificationId: 14,
+      ),
+      Todo(
+        id: 'done',
+        title: 'Completed',
+        dueAt: now.add(const Duration(days: 1)),
+        isCompleted: true,
+        createdAt: now,
+        notificationId: 11,
+      ),
+      Todo(id: 'undated', title: 'Undated', createdAt: now, notificationId: 12),
+      Todo(
+        id: 'past',
+        title: 'Too late',
+        dueAt: now.add(const Duration(minutes: 5)),
+        createdAt: now,
+        notificationId: 13,
+      ),
+    ]);
+    notifications.pending.addAll({
+      10: const PendingReminder(id: 10, payload: 'kept'),
+      11: const PendingReminder(id: 11, payload: 'done'),
+      12: const PendingReminder(id: 12, payload: 'undated'),
+      13: const PendingReminder(id: 13, payload: 'past'),
+      99: const PendingReminder(id: 99, payload: 'missing'),
+    });
+    await controller.loadTodos();
+    expect(notifications.cancelledIds.toSet(), {11, 12, 13, 99});
+    expect(notifications.pending.keys.toSet(), {10, 14});
+    expect(notifications.scheduledTodos.map((todo) => todo.id), ['schedule']);
+  });
+
+  test('load failure never reconciles as an empty store', () async {
+    store.failRead = true;
+    notifications.pending[9] = const PendingReminder(id: 9, payload: 'saved');
+    await controller.loadTodos();
+    expect(controller.loadError, isNotNull);
+    expect(notifications.cancelledIds, isEmpty);
+    expect(notifications.pending.containsKey(9), isTrue);
+  });
+
+  test('serialized create scheduling followed by completion cannot leave a pending reminder', () async {
+    await controller.loadTodos();
+    notifications.scheduleGate = Completer<void>();
+    notifications.scheduleStarted = Completer<void>();
+    final creating = controller.createTodo(
+      title: 'Race reminder',
+      dueAt: now.add(const Duration(hours: 1)),
+    );
+    await notifications.scheduleStarted!.future;
+    final todo = controller.activeTodos.single;
+    final completing = controller.completeTodo(todo.id);
+    notifications.scheduleGate!.complete();
+    await Future.wait([creating, completing]);
+    expect(
+      (await SharedPreferencesTodoRepository(
+        store: store,
+      ).loadTodos()).single.isCompleted,
+      isTrue,
+    );
+    expect(notifications.pending, isEmpty);
+    expect(notifications.cancelledIds, [todo.notificationId]);
   });
 }
