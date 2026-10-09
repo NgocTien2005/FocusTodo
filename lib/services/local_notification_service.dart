@@ -88,6 +88,12 @@ class LocalNotificationService implements NotificationService {
     if (permission != ReminderPermissionStatus.enabled) {
       throw ReminderPermissionException(permission);
     }
+    // Initialization and permission checks may involve platform settings UI.
+    // Recheck against the clock immediately before asking Android to schedule
+    // so an elapsed reminder is never registered in the past.
+    if (!reminderAt.isAfter(_clock().toUtc())) {
+      return ReminderScheduleResult.noAdvanceNotice;
+    }
     await _backend.schedule(
       id: todo.notificationId,
       scheduledDate: timezone.TZDateTime.from(reminderAt, timezone.local),

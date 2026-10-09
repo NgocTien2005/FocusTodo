@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:focus_todo/models/todo.dart';
 import 'package:focus_todo/services/local_notification_service.dart';
@@ -85,6 +87,26 @@ void main() {
       expect(backend.schedules, isEmpty);
     },
   );
+
+  test('rechecks eligibility after asynchronous initialization', () async {
+    final backend = MemoryReminderBackend();
+    final timezoneGate = Completer<String>();
+    var clock = now;
+    final service = LocalNotificationService(
+      backend: backend,
+      clock: () => clock,
+      timezoneProvider: () => timezoneGate.future,
+    );
+    final scheduling = service.scheduleReminder(
+      todo(dueAt: now.add(const Duration(minutes: 11))),
+    );
+    await Future<void>.delayed(Duration.zero);
+    clock = now.add(const Duration(minutes: 2));
+    timezoneGate.complete('UTC');
+
+    expect(await scheduling, ReminderScheduleResult.noAdvanceNotice);
+    expect(backend.schedules, isEmpty);
+  });
 
   test(
     'permission denial is explicit and initialization can be retried',
