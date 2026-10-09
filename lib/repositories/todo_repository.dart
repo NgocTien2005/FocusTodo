@@ -15,4 +15,15 @@ abstract interface class TodoRepository {
     DateTime? dueAt,
     required DateTime createdAt,
   });
+
+  /// Marks the latest stored record complete without replacing other data.
+  /// Throws [TodoNotFoundException] when [id] has not been stored.
+  Future<Todo> completeTodo(String id);
+}
+
+class TodoNotFoundException implements Exception {
+  const TodoNotFoundException(this.id);
+  final String id;
+  @override
+  String toString() => 'TODO "$id" was not found.';
 }

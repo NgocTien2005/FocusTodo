@@ -322,17 +322,120 @@ void main() {
     expect(local.visibleTodos.length, 7);
   });
 
+  test('reload during save waits and loads the latest mutation', () async {
+    await controller.loadTodos();
+    store.writeGate = Completer<void>();
+    final pending = controller.createTodo(title: 'Saved');
+    final reloading = controller.loadTodos();
+    store.writeGate!.complete();
+    await pending;
+    await reloading;
+    expect(controller.activeTodos.single.title, 'Saved');
+  });
+
   test(
-    'reload during save is rejected without blocking a later reload',
+    'completion preserves category and query, and retry works after failure',
     () async {
+      final repository = SharedPreferencesTodoRepository(store: store);
+      await repository.saveTodos([
+        Todo(
+          id: 'a',
+          title: 'Read notes',
+          description: 'Project',
+          dueAt: DateTime(2026, 10, 8).toUtc(),
+          createdAt: now,
+          notificationId: 0,
+        ),
+        Todo(
+          id: 'b',
+          title: 'Other notes',
+          dueAt: DateTime(2026, 10, 7).toUtc(),
+          createdAt: now,
+          notificationId: 1,
+        ),
+      ]);
       await controller.loadTodos();
-      store.writeGate = Completer<void>();
-      final pending = controller.createTodo(title: 'Saved');
-      await expectLater(controller.loadTodos(), throwsStateError);
-      store.writeGate!.complete();
-      await pending;
-      await controller.loadTodos();
-      expect(controller.activeTodos.single.title, 'Saved');
+      controller.selectCategory(TodoCategory.upcoming);
+      controller.setSearchQuery('read');
+      store.rejectWrite = true;
+      await expectLater(
+        controller.completeTodo('a'),
+        throwsA(isA<TodoStorageException>()),
+      );
+      expect(controller.visibleTodos.map((todo) => todo.id), ['a']);
+      expect(controller.isCompleting('a'), isFalse);
+      store.rejectWrite = false;
+      final result = await controller.completeTodo('a');
+      expect(result.isCompleted, isTrue);
+      expect(controller.category, TodoCategory.upcoming);
+      expect(controller.searchQuery, 'read');
+      expect(controller.visibleTodos, isEmpty);
+      expect(controller.activeTodos.map((todo) => todo.id), ['b']);
     },
   );
+
+  test(
+    'completed records disappear from All, Today, Upcoming, and search',
+    () async {
+      final repository = SharedPreferencesTodoRepository(store: store);
+      await repository.saveTodos([
+        Todo(
+          id: 'today-item',
+          title: 'Daily report',
+          dueAt: now.add(const Duration(hours: 2)).toUtc(),
+          createdAt: now,
+          notificationId: 0,
+        ),
+        Todo(
+          id: 'upcoming-item',
+          title: 'Plan report',
+          dueAt: now.add(const Duration(days: 1)).toUtc(),
+          createdAt: now,
+          notificationId: 1,
+        ),
+        Todo(
+          id: 'undated-item',
+          title: 'Report archive',
+          createdAt: now,
+          notificationId: 2,
+        ),
+      ]);
+      await controller.loadTodos();
+      controller.setSearchQuery('report');
+      expect(controller.visibleTodos.length, 3);
+      await controller.completeTodo('today-item');
+      expect(controller.visibleTodos.map((todo) => todo.id), [
+        'upcoming-item',
+        'undated-item',
+      ]);
+      controller.selectCategory(TodoCategory.today);
+      expect(controller.visibleTodos, isEmpty);
+      controller.selectCategory(TodoCategory.upcoming);
+      expect(controller.visibleTodos.map((todo) => todo.id), ['upcoming-item']);
+      await controller.completeTodo('upcoming-item');
+      expect(controller.visibleTodos, isEmpty);
+      controller.selectCategory(TodoCategory.all);
+      expect(controller.visibleTodos.map((todo) => todo.id), ['undated-item']);
+      await controller.completeTodo('undated-item');
+      expect(controller.visibleTodos, isEmpty);
+      expect(controller.activeTodos, isEmpty);
+    },
+  );
+
+  test('duplicate completion is blocked while pending and concurrent create is retained', () async {
+    final repository = SharedPreferencesTodoRepository(store: store);
+    final todo = await repository.createTodo(title: 'First', createdAt: now);
+    await controller.loadTodos();
+    store.writeGate = Completer<void>();
+    final completion = controller.completeTodo(todo.id);
+    expect(controller.isCompleting(todo.id), isTrue);
+    await expectLater(controller.completeTodo(todo.id), throwsStateError);
+    final creation = controller.createTodo(title: 'Concurrent');
+    store.writeGate!.complete();
+    await Future.wait([completion, creation]);
+    expect(controller.activeTodos.map((item) => item.title), ['Concurrent']);
+    final persisted = await repository.loadTodos();
+    expect(persisted.length, 2);
+    expect(persisted.first.isCompleted, isTrue);
+  });
 }

@@ -88,9 +88,62 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  todo.title,
-                  style: Theme.of(context).textTheme.titleMedium,
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        todo.title,
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                    ),
+                    if (controller.isCompleting(todo.id))
+                      const Padding(
+                        padding: EdgeInsets.all(12),
+                        child: SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      )
+                    else
+                      Semantics(
+                        label: 'Complete ${todo.title}',
+                        child: Checkbox(
+                          key: ValueKey('complete-${todo.id}'),
+                          value: false,
+                          onChanged: (value) async {
+                            if (value != true) return;
+                            try {
+                              await controller.completeTodo(todo.id);
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context)
+                                  ..hideCurrentSnackBar()
+                                  ..showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        'Completed “${todo.title}”.',
+                                      ),
+                                    ),
+                                  );
+                              }
+                            } catch (error) {
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context)
+                                  ..hideCurrentSnackBar()
+                                  ..showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        'Could not complete TODO: $error',
+                                      ),
+                                    ),
+                                  );
+                              }
+                            }
+                          },
+                        ),
+                      ),
+                  ],
                 ),
                 if (todo.description != null &&
                     todo.description!.isNotEmpty) ...[
