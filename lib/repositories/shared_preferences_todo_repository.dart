@@ -119,6 +119,34 @@ class SharedPreferencesTodoRepository implements TodoRepository {
   });
 
   @override
+  Future<Todo> updateTodo({
+    required String id,
+    required String title,
+    String? description,
+    DateTime? dueAt,
+  }) => _serialized(() async {
+    final document = await _read();
+    final index = document.todos.indexWhere((todo) => todo.id == id);
+    if (index < 0) throw TodoNotFoundException(id);
+    final current = document.todos[index];
+    if (current.isCompleted) throw TodoAlreadyCompletedException(id);
+    final updatedTodo = current.copyWith(
+      title: title,
+      description: description,
+      dueAt: dueAt,
+    );
+    final todos = List<Todo>.of(document.todos)..[index] = updatedTodo;
+    final updated = _Document(
+      todos: todos,
+      nextTodoId: document.nextTodoId,
+      nextNotificationId: document.nextNotificationId,
+    );
+    _validate(updated);
+    await _write(updated);
+    return updatedTodo;
+  });
+
+  @override
   Future<void> saveTodos(List<Todo> todos) {
     final snapshot = List<Todo>.of(todos);
     return _serialized(() async {

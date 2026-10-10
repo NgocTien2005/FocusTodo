@@ -7,6 +7,7 @@ import 'package:focus_todo/controllers/todo_controller.dart';
 import 'package:focus_todo/models/todo.dart';
 import 'package:focus_todo/repositories/shared_preferences_todo_repository.dart';
 import 'package:focus_todo/services/notification_service.dart';
+import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
 import 'support/memory_document_store.dart';
@@ -609,6 +610,206 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Old day'), findsNothing);
     expect(find.text('New day'), findsOneWidget);
+  });
+
+  testWidgets('edit prepopulates fields and preserves category and query', (
+    tester,
+  ) async {
+    final store = await _searchStore();
+    final notifications = MemoryNotificationService()..now = _now;
+    await _home(tester, store, notifications: notifications);
+    await tester.tap(find.text('Today'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(_searchKey), 'read');
+    await tester.pumpAndSettle();
+    expect(find.text('Read today'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('edit-today')));
+    await tester.pumpAndSettle();
+    expect(find.text('Edit TODO'), findsOneWidget);
+    expect(
+      tester.widget<TextFormField>(find.byKey(_titleKey)).controller!.text,
+      'Read today',
+    );
+    expect(
+      tester
+          .widget<TextFormField>(find.byKey(_descriptionKey))
+          .controller!
+          .text,
+      '',
+    );
+    final storedDue = DateTime(2026, 10, 7, 18).toUtc().toLocal();
+    expect(find.text(DateFormat.yMMMd().format(storedDue)), findsOneWidget);
+    expect(find.text('Choose time'), findsNothing);
+    expect(storedDue.hour, 18);
+    await tester.enterText(find.byKey(_titleKey), 'Edited today');
+    await tester.ensureVisible(find.byKey(_saveKey));
+    await tester.tap(find.byKey(_saveKey));
+    await tester.pumpAndSettle();
+
+    expect(_controller(tester).category, TodoCategory.today);
+    expect(_controller(tester).searchQuery, 'read');
+    expect(find.text('No matching TODOs in this category.'), findsOneWidget);
+    final edited = (await SharedPreferencesTodoRepository(
+      store: store,
+    ).loadTodos()).first;
+    expect(edited.title, 'Edited today');
+    expect(notifications.cancelledIds, [edited.notificationId]);
+    expect(notifications.scheduledTodos.last.title, 'Edited today');
+    await tester.enterText(find.byKey(_searchKey), 'edited');
+    await tester.pumpAndSettle();
+    expect(find.text('Edited today'), findsOneWidget);
+  });
+
+  testWidgets(
+    'edit failure retains input and leaves original record unchanged',
+    (tester) async {
+      final store = MemoryDocumentStore();
+      final original = await SharedPreferencesTodoRepository(store: store)
+          .createTodo(
+            title: 'Original title',
+            description: 'Original description',
+            createdAt: _now,
+          );
+      await _home(tester, store);
+      await tester.tap(find.byKey(ValueKey('edit-${original.id}')));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(_titleKey), 'Attempted edit');
+      store.rejectWrite = true;
+      await tester.ensureVisible(find.byKey(_saveKey));
+      await tester.tap(find.byKey(_saveKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('save-error')), findsOneWidget);
+      expect(
+        tester.widget<TextFormField>(find.byKey(_titleKey)).controller!.text,
+        'Attempted edit',
+      );
+      final unchanged = (await SharedPreferencesTodoRepository(
+        store: store,
+      ).loadTodos()).single;
+      expect(unchanged.toJson(), original.toJson());
+
+      store.rejectWrite = false;
+      await tester.tap(find.byKey(_saveKey));
+      await tester.pumpAndSettle();
+      expect(find.text('FocusTodo'), findsOneWidget);
+      expect(
+        (await SharedPreferencesTodoRepository(
+          store: store,
+        ).loadTodos()).single.title,
+        'Attempted edit',
+      );
+    },
+  );
+
+  testWidgets('canceling an edit leaves saved TODO unchanged', (tester) async {
+    final store = MemoryDocumentStore();
+    final original = await SharedPreferencesTodoRepository(store: store)
+        .createTodo(title: 'Leave unchanged', createdAt: _now);
+    await _home(tester, store);
+    await tester.tap(find.byKey(ValueKey('edit-${original.id}')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(_titleKey), 'Unsaved title');
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+
+    expect(
+      (await SharedPreferencesTodoRepository(
+        store: store,
+      ).loadTodos()).single.toJson(),
+      original.toJson(),
+    );
+    expect(find.text('Leave unchanged'), findsOneWidget);
+  });
+
+  testWidgets('edit reminder cancellation warning has a retry action', (
+    tester,
+  ) async {
+    final store = MemoryDocumentStore();
+    final todo = await SharedPreferencesTodoRepository(store: store).createTodo(
+      title: 'Reminder before edit',
+      dueAt: _now.add(const Duration(hours: 1)),
+      createdAt: _now,
+    );
+    final notifications = MemoryNotificationService()..now = _now;
+    await _home(tester, store, notifications: notifications);
+    notifications.failCancel = true;
+    await tester.tap(find.byKey(ValueKey('edit-${todo.id}')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(_titleKey), 'Reminder after edit');
+    await tester.ensureVisible(find.byKey(_saveKey));
+    await tester.tap(find.byKey(_saveKey));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('reminder-update-warning')), findsOneWidget);
+    expect(
+      (await SharedPreferencesTodoRepository(
+        store: store,
+      ).loadTodos()).single.title,
+      'Reminder after edit',
+    );
+    notifications.failCancel = false;
+    await tester.tap(find.byKey(const Key('retry-reminder')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('FocusTodo'), findsOneWidget);
+    expect(notifications.pending[todo.notificationId]?.payload, todo.id);
+    expect(notifications.scheduledTodos.last.title, 'Reminder after edit');
+    expect(
+      notifications.scheduledTodos.last.notificationId,
+      todo.notificationId,
+    );
+  });
+
+  testWidgets(
+    'editing an overdue TODO without changing its due time succeeds',
+    (tester) async {
+      final store = MemoryDocumentStore();
+      final repository = SharedPreferencesTodoRepository(store: store);
+      final overdue = await repository.createTodo(
+        title: 'Overdue item',
+        dueAt: _now.subtract(const Duration(days: 1)),
+        createdAt: _now.subtract(const Duration(days: 2)),
+      );
+      await _home(tester, store);
+      await tester.tap(find.byKey(ValueKey('edit-${overdue.id}')));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(_titleKey), 'Updated overdue title');
+      await tester.ensureVisible(find.byKey(_saveKey));
+      await tester.tap(find.byKey(_saveKey));
+      await tester.pumpAndSettle();
+
+      final saved = (await repository.loadTodos()).single;
+      expect(saved.title, 'Updated overdue title');
+      expect(saved.dueAt!.isAtSameMomentAs(overdue.dueAt!), isTrue);
+    },
+  );
+
+  testWidgets('selecting a past due time in edit is rejected at submission', (
+    tester,
+  ) async {
+    final store = MemoryDocumentStore();
+    final original = await SharedPreferencesTodoRepository(store: store)
+        .createTodo(
+          title: 'Future today',
+          dueAt: DateTime(2026, 10, 7, 18).toUtc(),
+          createdAt: _now,
+        );
+    await _home(tester, store);
+    await tester.tap(find.byKey(ValueKey('edit-${original.id}')));
+    await tester.pumpAndSettle();
+    await _time(tester, '11', '00', period: 'AM');
+    await _save(tester);
+
+    expect(find.byKey(const Key('due-error')), findsOneWidget);
+    expect(find.text('Edit TODO'), findsOneWidget);
+    expect(
+      (await SharedPreferencesTodoRepository(
+        store: store,
+      ).loadTodos()).single.toJson(),
+      original.toJson(),
+    );
   });
 
   testWidgets(

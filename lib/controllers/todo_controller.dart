@@ -47,6 +47,7 @@ class TodoController extends ChangeNotifier {
   bool _saving = false;
   bool _disposed = false;
   final Set<String> _completingIds = {};
+  final Set<String> _editingIds = {};
   final Map<String, String> _reminderScheduleErrors = {};
   final Map<String, ReminderCancellationWarning> _reminderCancellationWarnings =
       {};
@@ -86,6 +87,16 @@ class TodoController extends ChangeNotifier {
       _loaded && !_loading && !_requestingReminderPermissions;
   bool get canCreate => _loaded && !_loading && !_saving && _loadError == null;
   bool isCompleting(String id) => _completingIds.contains(id);
+  bool isEditing(String id) => _editingIds.contains(id);
+  ReminderCancellationWarning? reminderCancellationWarningForTodo(
+    String todoId,
+  ) {
+    for (final warning in _reminderCancellationWarnings.values) {
+      if (warning.todoId == todoId) return warning;
+    }
+    return null;
+  }
+
   DateTime get currentTime => _clock();
   List<Todo> get activeTodos =>
       List.unmodifiable(_todos.where((todo) => !todo.isCompleted));
@@ -237,7 +248,7 @@ class TodoController extends ChangeNotifier {
     _notify();
   }
 
-  Future<void> _cancelReminderLocked({
+  Future<bool> _cancelReminderLocked({
     required int notificationId,
     required String? todoId,
     required String title,
@@ -246,6 +257,7 @@ class TodoController extends ChangeNotifier {
       await notificationService.cancelReminder(notificationId);
       _reminderCancellationWarnings.remove('$notificationId');
       _notify();
+      return true;
     } catch (error) {
       _recordCancellationFailure(
         notificationId: notificationId,
@@ -253,6 +265,7 @@ class TodoController extends ChangeNotifier {
         title: title,
         error: error,
       );
+      return false;
     }
   }
 
@@ -367,13 +380,19 @@ class TodoController extends ChangeNotifier {
   });
 
   Future<void> retryCancellation(ReminderCancellationWarning warning) =>
-      _enqueue(
-        () => _cancelReminderLocked(
+      _enqueue(() async {
+        final canceled = await _cancelReminderLocked(
           notificationId: warning.notificationId,
           todoId: warning.todoId,
           title: warning.title,
-        ),
-      );
+        );
+        if (!canceled || warning.todoId == null) return;
+        final matches = _todos.where((todo) => todo.id == warning.todoId);
+        final todo = matches.isEmpty ? null : matches.first;
+        if (todo != null && !todo.isCompleted && todo.dueAt != null) {
+          await _scheduleTodoReminderLocked(todo);
+        }
+      });
 
   Future<Todo> createTodo({
     required String title,
@@ -445,6 +464,83 @@ class TodoController extends ChangeNotifier {
       _notify();
     }
   }
+
+  Future<Todo> updateTodo({
+    required String id,
+    required String title,
+    String? description,
+    DateTime? dueAt,
+    bool dueTimeChanged = false,
+  }) async {
+    if (!_loaded || _loading || _loadError != null) {
+      throw StateError('Load TODOs successfully before editing one.');
+    }
+    if (_editingIds.contains(id)) {
+      throw StateError('This TODO is already being edited.');
+    }
+    if (_completingIds.contains(id)) {
+      throw StateError('This TODO is being completed.');
+    }
+    final matches = _todos.where((todo) => todo.id == id);
+    final previous = matches.isEmpty ? null : matches.first;
+    if (previous == null) throw TodoNotFoundException(id);
+    if (previous.isCompleted) throw TodoAlreadyCompletedException(id);
+
+    final validation = validateTitle(title);
+    if (validation != null) throw TodoValidationException(validation);
+    final dueTimeDiffers = !_sameInstant(previous.dueAt, dueAt);
+    if (dueTimeChanged || dueTimeDiffers) {
+      final dueValidation = validateDueAt(dueAt, currentTime);
+      if (dueValidation != null) throw TodoValidationException(dueValidation);
+    }
+    final trimmedDescription = description?.trim();
+    _editingIds.add(id);
+    _notify();
+    try {
+      return await _enqueue(() async {
+        final saved = await repository.updateTodo(
+          id: id,
+          title: title.trim(),
+          description: trimmedDescription == null || trimmedDescription.isEmpty
+              ? null
+              : trimmedDescription,
+          dueAt: dueAt,
+        );
+        if (!_disposed) {
+          _todos = [for (final todo in _todos) todo.id == id ? saved : todo];
+        }
+        final reminderChanged =
+            previous.title != saved.title ||
+            dueTimeChanged ||
+            !_sameInstant(previous.dueAt, saved.dueAt);
+        if (reminderChanged) {
+          _reminderScheduleErrors.remove(id);
+          _noAdvanceReminderIds.remove(id);
+          final canceled = await _cancelReminderLocked(
+            notificationId: saved.notificationId,
+            todoId: saved.id,
+            title: saved.title,
+          );
+          if (canceled && saved.dueAt != null) {
+            if (_hasAdvanceNotice(saved)) {
+              await _scheduleTodoReminderLocked(saved);
+            } else {
+              _noAdvanceReminderIds.add(saved.id);
+              _notify();
+            }
+          }
+        }
+        return saved;
+      });
+    } finally {
+      _editingIds.remove(id);
+      _notify();
+    }
+  }
+
+  static bool _sameInstant(DateTime? left, DateTime? right) => left == null
+      ? right == null
+      : right != null && left.isAtSameMomentAs(right);
 
   void selectCategory(TodoCategory category) {
     if (_category == category) return;
