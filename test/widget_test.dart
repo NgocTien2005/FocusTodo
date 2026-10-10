@@ -999,4 +999,78 @@ void main() {
       findsNothing,
     );
   });
+
+  testWidgets('delete confirmation cancel leaves TODO unchanged', (
+    tester,
+  ) async {
+    final store = MemoryDocumentStore();
+    await SharedPreferencesTodoRepository(store: store)
+        .createTodo(title: 'Buy milk', createdAt: _now);
+    await _home(tester, store);
+    await tester.tap(find.byKey(const ValueKey('delete-todo-1')));
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Delete “Buy milk”? This cannot be undone.'),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const Key('cancel-delete')));
+    await tester.pumpAndSettle();
+    expect(find.text('Buy milk'), findsOneWidget);
+    expect(
+      (await SharedPreferencesTodoRepository(store: store).loadTodos()),
+      hasLength(1),
+    );
+  });
+
+  testWidgets(
+    'confirmed deletion removes last visible item and cancels reminder',
+    (tester) async {
+      final store = MemoryDocumentStore();
+      final notifications = MemoryNotificationService()..now = _now;
+      await SharedPreferencesTodoRepository(store: store).createTodo(
+        title: 'Last visible',
+        dueAt: _now.add(const Duration(hours: 1)),
+        createdAt: _now,
+      );
+      await _home(tester, store, notifications: notifications);
+      await tester.tap(find.byKey(const ValueKey('delete-todo-1')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('confirm-delete')));
+      await tester.pumpAndSettle();
+      expect(find.text('No active TODOs.'), findsOneWidget);
+      expect(
+        await SharedPreferencesTodoRepository(store: store).loadTodos(),
+        isEmpty,
+      );
+      expect(notifications.cancelledIds, [0]);
+    },
+  );
+
+  testWidgets('failed delete retains TODO and allows retry', (tester) async {
+    final store = MemoryDocumentStore();
+    await SharedPreferencesTodoRepository(store: store)
+        .createTodo(title: 'Buy milk', createdAt: _now);
+    await _home(tester, store);
+    store.rejectWrite = true;
+    await tester.tap(find.byKey(const ValueKey('delete-todo-1')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('confirm-delete')));
+    await tester.pumpAndSettle();
+    expect(find.text('Buy milk'), findsOneWidget);
+    expect(find.textContaining('Could not delete TODO'), findsOneWidget);
+    expect(
+      await SharedPreferencesTodoRepository(store: store).loadTodos(),
+      hasLength(1),
+    );
+    store.rejectWrite = false;
+    await tester.tap(find.byKey(const ValueKey('delete-todo-1')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('confirm-delete')));
+    await tester.pumpAndSettle();
+    expect(find.text('Buy milk'), findsNothing);
+    expect(
+      await SharedPreferencesTodoRepository(store: store).loadTodos(),
+      isEmpty,
+    );
+  });
 }

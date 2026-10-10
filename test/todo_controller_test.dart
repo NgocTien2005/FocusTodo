@@ -909,4 +909,60 @@ void main() {
     expect(notifications.pending, isEmpty);
     expect(notifications.cancelledIds, [todo.notificationId]);
   });
+
+  test(
+    'delete persists before cancel, cancellation failure remains retryable',
+    () async {
+      await controller.loadTodos();
+      final todo = await controller.createTodo(
+        title: 'Delete reminder',
+        dueAt: now.add(const Duration(hours: 1)),
+      );
+      notifications.failCancel = true;
+      await controller.deleteTodo(todo.id);
+      expect(controller.activeTodos, isEmpty);
+      expect(
+        await SharedPreferencesTodoRepository(store: store).loadTodos(),
+        isEmpty,
+      );
+      expect(
+        controller.reminderCancellationWarnings.single.notificationId,
+        todo.notificationId,
+      );
+      notifications.failCancel = false;
+      final warning = controller.reminderCancellationWarnings.single;
+      await controller.retryCancellation(warning);
+      expect(notifications.cancelledIds, [
+        todo.notificationId,
+        todo.notificationId,
+      ]);
+      expect(controller.reminderCancellationWarnings, isEmpty);
+      expect(notifications.pending, isEmpty);
+    },
+  );
+
+  test(
+    'delete and edit are serialized without losing another mutation',
+    () async {
+      await controller.loadTodos();
+      final todo = await controller.createTodo(
+        title: 'Before',
+        description: 'Notes',
+      );
+      final deleting = controller.deleteTodo(todo.id);
+      await expectLater(
+        controller.updateTodo(
+          id: todo.id,
+          title: 'After',
+          description: 'Notes',
+        ),
+        throwsA(isA<StateError>()),
+      );
+      await deleting;
+      expect(
+        await SharedPreferencesTodoRepository(store: store).loadTodos(),
+        isEmpty,
+      );
+    },
+  );
 }

@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
 import '../controllers/todo_controller.dart';
+import '../models/todo.dart';
 import '../services/notification_service.dart';
 import '../widgets/empty_state.dart';
 import 'create_todo_screen.dart';
@@ -18,6 +19,45 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   late final TextEditingController _search;
+
+  Future<void> _confirmDelete(TodoController controller, Todo todo) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Delete TODO?'),
+        content: Text('Delete “${todo.title}”? This cannot be undone.'),
+        actions: [
+          TextButton(
+            key: const Key('cancel-delete'),
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            key: const Key('confirm-delete'),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await controller.deleteTodo(todo.id);
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(content: Text('Deleted “${todo.title}”.')));
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            SnackBar(content: Text('Could not delete TODO: $error')),
+          );
+      }
+    }
+  }
 
   @override
   void initState() {
@@ -202,7 +242,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
                     ),
-                    if (controller.isCompleting(todo.id))
+                    if (controller.isCompleting(todo.id) ||
+                        controller.isDeleting(todo.id))
                       const Padding(
                         padding: EdgeInsets.all(12),
                         child: SizedBox(
@@ -217,35 +258,39 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         child: Checkbox(
                           key: ValueKey('complete-${todo.id}'),
                           value: false,
-                          onChanged: (value) async {
-                            if (value != true) return;
-                            try {
-                              await controller.completeTodo(todo.id);
-                              if (context.mounted) {
-                                ScaffoldMessenger.of(context)
-                                  ..hideCurrentSnackBar()
-                                  ..showSnackBar(
-                                    SnackBar(
-                                      content: Text(
-                                        'Completed “${todo.title}”.',
-                                      ),
-                                    ),
-                                  );
-                              }
-                            } catch (error) {
-                              if (context.mounted) {
-                                ScaffoldMessenger.of(context)
-                                  ..hideCurrentSnackBar()
-                                  ..showSnackBar(
-                                    SnackBar(
-                                      content: Text(
-                                        'Could not complete TODO: $error',
-                                      ),
-                                    ),
-                                  );
-                              }
-                            }
-                          },
+                          onChanged:
+                              controller.isEditing(todo.id) ||
+                                  controller.isDeleting(todo.id)
+                              ? null
+                              : (value) async {
+                                  if (value != true) return;
+                                  try {
+                                    await controller.completeTodo(todo.id);
+                                    if (context.mounted) {
+                                      ScaffoldMessenger.of(context)
+                                        ..hideCurrentSnackBar()
+                                        ..showSnackBar(
+                                          SnackBar(
+                                            content: Text(
+                                              'Completed “${todo.title}”.',
+                                            ),
+                                          ),
+                                        );
+                                    }
+                                  } catch (error) {
+                                    if (context.mounted) {
+                                      ScaffoldMessenger.of(context)
+                                        ..hideCurrentSnackBar()
+                                        ..showSnackBar(
+                                          SnackBar(
+                                            content: Text(
+                                              'Could not complete TODO: $error',
+                                            ),
+                                          ),
+                                        );
+                                    }
+                                  }
+                                },
                         ),
                       ),
                   ],
@@ -267,6 +312,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     key: ValueKey('edit-${todo.id}'),
                     onPressed:
                         controller.isEditing(todo.id) ||
+                            controller.isDeleting(todo.id) ||
                             controller.isCompleting(todo.id)
                         ? null
                         : () {
@@ -279,6 +325,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     icon: const Icon(Icons.edit_outlined),
                     label: Text(
                       controller.isEditing(todo.id) ? 'Saving…' : 'Edit',
+                    ),
+                  ),
+                ),
+                Align(
+                  alignment: AlignmentDirectional.centerEnd,
+                  child: TextButton.icon(
+                    key: ValueKey('delete-${todo.id}'),
+                    onPressed:
+                        controller.isDeleting(todo.id) ||
+                            controller.isEditing(todo.id) ||
+                            controller.isCompleting(todo.id)
+                        ? null
+                        : () => _confirmDelete(controller, todo),
+                    icon: const Icon(Icons.delete_outline),
+                    label: Text(
+                      controller.isDeleting(todo.id) ? 'Deleting…' : 'Delete',
                     ),
                   ),
                 ),
