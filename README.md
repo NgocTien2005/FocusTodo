@@ -35,7 +35,7 @@ Repository creation writes each `todo-N` ID, nonnegative int32 notification ID, 
 - Search combines with the selected category and ignores case and surrounding whitespace.
 - Completion hides a TODO from active lists and cancels its reminder after persistence.
 - A TODO without a due time has no reminder.
-Active TODOs can also be edited. The form trims titles and descriptions, allows clearing description and due time, and permits title/description edits to overdue TODOs when their due time is unchanged. Updates preserve stable IDs, creation/completion state, unrelated records, and allocator counters. Reminder changes follow persistence, reuse the same notification ID, and provide retry for failures using the latest saved record. Editing preserves the current category and search query. Active TODOs can be deleted individually from Home after a confirmation that names the TODO. Deletion persists before reminder cancellation; storage failures retain the TODO, and cancellation failures remain visible with a retry action even after the TODO is removed.
+Active TODOs can also be edited. The form trims titles and descriptions, allows clearing description and due time, and permits title/description edits to overdue TODOs when their due time is unchanged. Updates preserve stable IDs, creation/completion state, unrelated records, and allocator counters. Reminder changes follow persistence, reuse the same notification ID, and provide retry for failures using the latest saved record. Editing preserves the current category and search query. Active TODOs can be deleted individually from Home after a confirmation that names the TODO. Deletion persists before reminder cancellation; storage failures retain the TODO, and cancellation failures remain visible with a retry action even after the TODO is removed. Home uses compact overflow actions for Edit/Delete, an accessible completion control, and distinct undated and overdue due-time chips. Category selection hides the selected checkmark, uses selected colors, and adapts to a dropdown on narrow screens or when text is enlarged. Search, forms, cards, and primary buttons follow consistent Material 3 spacing, typography, and rounded corners.
 
 - Reminder time is `dueAt` minus ten minutes. If it has already passed, disclose that a full ten-minute advance reminder is unavailable; never schedule into the past.
 - Editing or deleting a TODO must update or cancel its reminder.
@@ -86,7 +86,7 @@ flutter run -d <online-android-device-id>
 
 ## Manual feature checks on Android
 
-1. Tap Add TODO, enter a title and optional description, leave date/time empty, and save. Verify the item appears under All with "No due date or time", but not Today or Upcoming.
+1. Tap Add TODO, enter a title and optional description, leave date/time empty, and save. Verify the item appears under All with an "Undated" status, but not Today or Upcoming.
 2. Create a second TODO with today's date and a time still in the future. Verify it appears under All and Today, but not Upcoming. Choose tomorrow's date/time for a third TODO; it should appear under All and Upcoming.
 3. On the create form, try a blank title, a date without a time, and a past time today. Each must remain on the form with an error. Clear due time to save the item as undated.
 4. Close the app and launch it again (do not uninstall or clear app data). Verify the titles, descriptions and due times remain, and check all three categories again. A same-day overdue item remains in Today and All; a previous-day item remains in All only.
@@ -98,6 +98,7 @@ flutter run -d <online-android-device-id>
 10. Complete a TODO from All, Today, or Upcoming, then repeat with a search query active. Confirm it disappears after the save succeeds, category/query remain selected, the confirmation appears, and the correct empty state is shown when the last visible result is completed. Reject a write to confirm the item stays visible and retry works. Restart and confirm the completed record remains saved but hidden and its reminder is absent.
 11. Enable reminders from Home. On Android 13+, allow notifications; when asked, grant Alarms & reminders exact-alarm access in Settings. Return to the app and verify the enabled status and that pending eligible TODOs are reconciled. Deny each permission separately, then retry after enabling it in system settings.
 12. Create a TODO due 11–12 minutes from now. Verify the pending entry uses the persisted notification ID and TODO ID payload and is scheduled exactly at `dueAt - 10 minutes`. Background or dismiss the app from Recents (do not force-stop it) and observe delivery at that time. Create another eligible TODO, complete it before its reminder, and verify the reminder is canceled. Restart and verify persistence; if feasible, test reboot restoration. Do not shorten the production reminder interval.
+13. On a normal-width phone, verify All/Today/Upcoming stay on one line and the selected segment is clear without a checkmark. On a narrow phone or with enlarged text, verify the adaptive category dropdown remains usable. Open a TODO action menu and check the compact Edit/Delete actions and distinct undated/overdue styling.
 
 Storage-failure retention and corrupted-data recovery are covered by automated tests. Completion checks: complete one TODO in All, Today, and Upcoming and confirm it disappears; search for it and confirm the result disappears; complete the last visible result and confirm the appropriate empty state; reject a completion write and confirm the TODO remains and can be retried; tap the checkbox repeatedly while pending and confirm there is one write; restart the app and confirm the completed TODO remains stored and hidden. Verify that descriptions, due times, IDs, unrelated TODOs, and allocator counters remain unchanged. No destructive clear-data recovery action is built into the app. Clearing app data or uninstalling removes local preferences. Reminder delivery remains subject to device verification.
 
@@ -111,6 +112,10 @@ Storage-failure retention and corrupted-data recovery are covered by automated t
 | Search | Yes; combines with categories | Controller/widget tests | Not yet |
 | Reminder ten minutes before due | Yes; exact Android alarm path, permissions and reconciliation | Service/controller/widget tests; does not prove OS delivery | Not yet |
 | Completion removes active TODO | Yes; persists completion and cancels reminder with retry warning | Repository/controller/widget tests | Not yet |
+
+## UI verification
+
+On 10 October 2026, `dart format lib test`, `flutter analyze`, `flutter test` (102 tests), and `flutter build apk --debug` passed for the UI polish branch. Widget layout checks passed at 320 px width and enlarged text. The debug APK installed and launched on the **Pixel_9 emulator (Android 17 / API 37, sdk gphone16k x86_64)**. The Home screen screenshot at [docs/screenshots/ui-polish-pixel9.png](docs/screenshots/ui-polish-pixel9.png) shows All/Today/Upcoming on one line with a clearly selected segment and no checkmark. No TODO test data was created, and no physical-device verification was performed.
 
 ## Notifications and platform limitations
 
