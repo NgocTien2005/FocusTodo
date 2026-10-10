@@ -20,6 +20,70 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   late final TextEditingController _search;
 
+  void _openTodoAction(TodoController controller, Todo todo, String action) {
+    if (action == 'edit') {
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => CreateTodoScreen(todo: todo)),
+      );
+    } else if (action == 'delete') {
+      _confirmDelete(controller, todo);
+    }
+  }
+
+  Widget _categorySelector(TodoController controller) => LayoutBuilder(
+    builder: (context, constraints) {
+      final largeText = MediaQuery.textScalerOf(context).scale(1) >= 1.3;
+      if (constraints.maxWidth < 340 || largeText) {
+        return DropdownButtonFormField<TodoCategory>(
+          key: const Key('todo-category-adaptive'),
+          initialValue: controller.category,
+          decoration: const InputDecoration(
+            labelText: 'Category',
+            border: OutlineInputBorder(),
+          ),
+          items: const [
+            DropdownMenuItem(value: TodoCategory.all, child: Text('All')),
+            DropdownMenuItem(value: TodoCategory.today, child: Text('Today')),
+            DropdownMenuItem(
+              value: TodoCategory.upcoming,
+              child: Text('Upcoming'),
+            ),
+          ],
+          onChanged: (value) {
+            if (value != null) controller.selectCategory(value);
+          },
+        );
+      }
+      final scheme = Theme.of(context).colorScheme;
+      return SegmentedButton<TodoCategory>(
+        showSelectedIcon: false,
+        style: ButtonStyle(
+          padding: const WidgetStatePropertyAll(
+            EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+          ),
+          backgroundColor: WidgetStateProperty.resolveWith(
+            (states) => states.contains(WidgetState.selected)
+                ? scheme.secondaryContainer
+                : scheme.surfaceContainerLow,
+          ),
+          foregroundColor: WidgetStateProperty.resolveWith(
+            (states) => states.contains(WidgetState.selected)
+                ? scheme.onSecondaryContainer
+                : scheme.onSurfaceVariant,
+          ),
+        ),
+        segments: const [
+          ButtonSegment(value: TodoCategory.all, label: Text('All')),
+          ButtonSegment(value: TodoCategory.today, label: Text('Today')),
+          ButtonSegment(value: TodoCategory.upcoming, label: Text('Upcoming')),
+        ],
+        selected: {controller.category},
+        onSelectionChanged: (values) =>
+            controller.selectCategory(values.single),
+      );
+    },
+  );
+
   Future<void> _confirmDelete(TodoController controller, Todo todo) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -226,10 +290,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       itemBuilder: (context, index) {
         final todo = todos[index];
         final due = todo.dueAt?.toLocal();
+        final overdue = due != null && due.isBefore(controller.currentTime);
+        final scheme = Theme.of(context).colorScheme;
         return Card(
           key: ValueKey(todo.id),
           child: Padding(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -239,7 +305,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     Expanded(
                       child: Text(
                         todo.title,
-                        style: Theme.of(context).textTheme.titleMedium,
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(fontWeight: FontWeight.w600),
                       ),
                     ),
                     if (controller.isCompleting(todo.id) ||
@@ -301,49 +368,81 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   Text(todo.description!),
                 ],
                 const SizedBox(height: 8),
-                Text(
-                  due == null
-                      ? 'No due date or time'
-                      : 'Due ${DateFormat.yMMMd().add_jm().format(due)}',
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 6,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    if (due == null)
+                      _statusChip(
+                        context,
+                        icon: Icons.event_busy_outlined,
+                        label: 'Undated',
+                        background: scheme.surfaceContainerHighest,
+                        foreground: scheme.onSurfaceVariant,
+                      )
+                    else ...[
+                      _statusChip(
+                        context,
+                        icon: overdue
+                            ? Icons.warning_amber_rounded
+                            : Icons.schedule_outlined,
+                        label: overdue ? 'Overdue' : 'Due date set',
+                        background: overdue
+                            ? scheme.errorContainer
+                            : scheme.surfaceContainerHighest,
+                        foreground: overdue
+                            ? scheme.onErrorContainer
+                            : scheme.onSurfaceVariant,
+                      ),
+                    ],
+                    if (controller.isDeleting(todo.id) ||
+                        controller.isEditing(todo.id))
+                      const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    else
+                      PopupMenuButton<String>(
+                        key: ValueKey('todo-actions-${todo.id}'),
+                        tooltip: 'TODO actions for ${todo.title}',
+                        enabled: !controller.isCompleting(todo.id),
+                        onSelected: (action) =>
+                            _openTodoAction(controller, todo, action),
+                        itemBuilder: (context) => const [
+                          PopupMenuItem(
+                            value: 'edit',
+                            child: ListTile(
+                              leading: Icon(Icons.edit_outlined),
+                              title: Text('Edit'),
+                              contentPadding: EdgeInsets.zero,
+                            ),
+                          ),
+                          PopupMenuItem(
+                            value: 'delete',
+                            child: ListTile(
+                              leading: Icon(Icons.delete_outline),
+                              title: Text('Delete'),
+                              contentPadding: EdgeInsets.zero,
+                            ),
+                          ),
+                        ],
+                      ),
+                  ],
                 ),
-                Align(
-                  alignment: AlignmentDirectional.centerEnd,
-                  child: TextButton.icon(
-                    key: ValueKey('edit-${todo.id}'),
-                    onPressed:
-                        controller.isEditing(todo.id) ||
-                            controller.isDeleting(todo.id) ||
-                            controller.isCompleting(todo.id)
-                        ? null
-                        : () {
-                            Navigator.of(context).push(
-                              MaterialPageRoute<void>(
-                                builder: (_) => CreateTodoScreen(todo: todo),
-                              ),
-                            );
-                          },
-                    icon: const Icon(Icons.edit_outlined),
-                    label: Text(
-                      controller.isEditing(todo.id) ? 'Saving…' : 'Edit',
+                if (due != null) ...[
+                  const SizedBox(height: 4),
+                  Padding(
+                    padding: const EdgeInsetsDirectional.only(start: 4),
+                    child: Text(
+                      DateFormat.yMMMd().add_jm().format(due),
+                      style: Theme.of(context).textTheme.bodySmall
+                          ?.copyWith(color: scheme.onSurfaceVariant),
                     ),
                   ),
-                ),
-                Align(
-                  alignment: AlignmentDirectional.centerEnd,
-                  child: TextButton.icon(
-                    key: ValueKey('delete-${todo.id}'),
-                    onPressed:
-                        controller.isDeleting(todo.id) ||
-                            controller.isEditing(todo.id) ||
-                            controller.isCompleting(todo.id)
-                        ? null
-                        : () => _confirmDelete(controller, todo),
-                    icon: const Icon(Icons.delete_outline),
-                    label: Text(
-                      controller.isDeleting(todo.id) ? 'Deleting…' : 'Delete',
-                    ),
-                  ),
-                ),
+                ],
               ],
             ),
           ),
@@ -351,6 +450,34 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       },
     );
   }
+
+  Widget _statusChip(
+    BuildContext context, {
+    required IconData icon,
+    required String label,
+    required Color background,
+    required Color foreground,
+  }) => DecoratedBox(
+    decoration: BoxDecoration(
+      color: background,
+      borderRadius: BorderRadius.circular(20),
+    ),
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: foreground),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: Theme.of(context).textTheme.labelMedium
+                ?.copyWith(color: foreground),
+          ),
+        ],
+      ),
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -363,23 +490,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              SegmentedButton<TodoCategory>(
-                segments: const [
-                  ButtonSegment(value: TodoCategory.all, label: Text('All')),
-                  ButtonSegment(
-                    value: TodoCategory.today,
-                    label: Text('Today'),
-                  ),
-                  ButtonSegment(
-                    value: TodoCategory.upcoming,
-                    label: Text('Upcoming'),
-                  ),
-                ],
-                selected: {controller.category},
-                onSelectionChanged: (values) =>
-                    controller.selectCategory(values.single),
-              ),
-              const SizedBox(height: 20),
+              _categorySelector(controller),
+              const SizedBox(height: 12),
               TextField(
                 key: const Key('todo-search'),
                 controller: _search,
@@ -397,7 +509,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           },
                           icon: const Icon(Icons.clear),
                         ),
-                  border: const OutlineInputBorder(),
+                  filled: true,
+                  fillColor: Theme.of(context).colorScheme.surfaceContainerLow,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    borderSide: BorderSide(
+                      color: Theme.of(context).colorScheme.outlineVariant,
+                    ),
+                  ),
                 ),
               ),
               _reminderBanner(controller),

@@ -78,6 +78,17 @@ Future<void> _save(WidgetTester tester) async {
   await tester.pumpAndSettle();
 }
 
+Future<void> _openTodoAction(
+  WidgetTester tester,
+  String todoId,
+  String action,
+) async {
+  await tester.tap(find.byKey(ValueKey('todo-actions-$todoId')));
+  await tester.pumpAndSettle();
+  await tester.tap(find.text(action).last);
+  await tester.pumpAndSettle();
+}
+
 Future<void> _date(WidgetTester tester, String day) async {
   await tester.ensureVisible(find.byKey(const Key('pick-date')));
   await tester.tap(find.byKey(const Key('pick-date')));
@@ -134,6 +145,14 @@ void main() {
         {entry.value},
       );
     }
+    expect(
+      tester
+          .widget<SegmentedButton<TodoCategory>>(
+            find.byType(SegmentedButton<TodoCategory>),
+          )
+          .showSelectedIcon,
+      isFalse,
+    );
     await tester.tap(find.byType(TextField));
     await tester.enterText(find.byKey(_searchKey), 'anything');
     await tester.pumpAndSettle();
@@ -142,6 +161,43 @@ void main() {
     expect(find.text('No active TODOs.'), findsOneWidget);
     expect(find.text('Coming next: search TODOs.'), findsNothing);
     expect(find.text('Coming next'), findsNothing);
+  });
+
+  testWidgets('category selector adapts to narrow screens and enlarged text', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(320, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    tester.platformDispatcher.textScaleFactorTestValue = 1.5;
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    final store = MemoryDocumentStore();
+    await SharedPreferencesTodoRepository(store: store).createTodo(
+      title: 'A long overdue task title that should wrap on a narrow phone',
+      description:
+          'A longer description must remain readable at increased text size.',
+      dueAt: _now.subtract(const Duration(hours: 1)),
+      createdAt: _now,
+    );
+    await _home(tester, store);
+    expect(find.byKey(const Key('todo-category-adaptive')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('todo-category-adaptive')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Upcoming').last);
+    await tester.pumpAndSettle();
+    expect(_controller(tester).category, TodoCategory.upcoming);
+    expect(tester.takeException(), isNull);
+
+    tester.view.physicalSize = const Size(420, 800);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('todo-category-adaptive')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('todo-category-adaptive')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('All').last);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Overdue'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets(
@@ -183,7 +239,7 @@ void main() {
       );
       await tester.enterText(find.byKey(_searchKey), 'GROCERY');
       await tester.pumpAndSettle();
-      expect(find.text('Buy milk'), findsOneWidget);
+      expect(find.text('Undated'), findsWidgets);
       expect(find.text('Read today'), findsNothing);
       expect(find.text('Read tomorrow'), findsNothing);
       expect(store.writes, 1); // Fixture setup only.
@@ -232,7 +288,7 @@ void main() {
       expect(find.byTooltip('Clear search'), findsOneWidget);
       await tester.tap(find.text('All'));
       await tester.pumpAndSettle();
-      expect(find.text('Undated'), findsOneWidget);
+      expect(find.text('Undated'), findsWidgets);
       await tester.enterText(find.byKey(_searchKey), 'missing');
       await tester.pumpAndSettle();
       expect(find.text('No matching TODOs in this category.'), findsOneWidget);
@@ -373,7 +429,7 @@ void main() {
       expect(find.text('Create TODO'), findsNothing);
       expect(find.text('Read notes'), findsOneWidget);
       expect(find.text('Chapter 1'), findsOneWidget);
-      expect(find.text('No due date or time'), findsOneWidget);
+      expect(find.text('Undated'), findsWidgets);
       await tester.pumpWidget(const SizedBox());
       await _home(tester, store);
       expect(find.text('Read notes'), findsOneWidget);
@@ -624,8 +680,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Read today'), findsOneWidget);
 
-    await tester.tap(find.byKey(const ValueKey('edit-today')));
-    await tester.pumpAndSettle();
+    await _openTodoAction(tester, 'today', 'Edit');
     expect(find.text('Edit TODO'), findsOneWidget);
     expect(
       tester.widget<TextFormField>(find.byKey(_titleKey)).controller!.text,
@@ -672,8 +727,7 @@ void main() {
             createdAt: _now,
           );
       await _home(tester, store);
-      await tester.tap(find.byKey(ValueKey('edit-${original.id}')));
-      await tester.pumpAndSettle();
+      await _openTodoAction(tester, original.id, 'Edit');
       await tester.enterText(find.byKey(_titleKey), 'Attempted edit');
       store.rejectWrite = true;
       await tester.ensureVisible(find.byKey(_saveKey));
@@ -708,8 +762,7 @@ void main() {
     final original = await SharedPreferencesTodoRepository(store: store)
         .createTodo(title: 'Leave unchanged', createdAt: _now);
     await _home(tester, store);
-    await tester.tap(find.byKey(ValueKey('edit-${original.id}')));
-    await tester.pumpAndSettle();
+    await _openTodoAction(tester, original.id, 'Edit');
     await tester.enterText(find.byKey(_titleKey), 'Unsaved title');
     await tester.pageBack();
     await tester.pumpAndSettle();
@@ -735,8 +788,7 @@ void main() {
     final notifications = MemoryNotificationService()..now = _now;
     await _home(tester, store, notifications: notifications);
     notifications.failCancel = true;
-    await tester.tap(find.byKey(ValueKey('edit-${todo.id}')));
-    await tester.pumpAndSettle();
+    await _openTodoAction(tester, todo.id, 'Edit');
     await tester.enterText(find.byKey(_titleKey), 'Reminder after edit');
     await tester.ensureVisible(find.byKey(_saveKey));
     await tester.tap(find.byKey(_saveKey));
@@ -773,8 +825,7 @@ void main() {
         createdAt: _now.subtract(const Duration(days: 2)),
       );
       await _home(tester, store);
-      await tester.tap(find.byKey(ValueKey('edit-${overdue.id}')));
-      await tester.pumpAndSettle();
+      await _openTodoAction(tester, overdue.id, 'Edit');
       await tester.enterText(find.byKey(_titleKey), 'Updated overdue title');
       await tester.ensureVisible(find.byKey(_saveKey));
       await tester.tap(find.byKey(_saveKey));
@@ -797,8 +848,7 @@ void main() {
           createdAt: _now,
         );
     await _home(tester, store);
-    await tester.tap(find.byKey(ValueKey('edit-${original.id}')));
-    await tester.pumpAndSettle();
+    await _openTodoAction(tester, original.id, 'Edit');
     await _time(tester, '11', '00', period: 'AM');
     await _save(tester);
 
@@ -1007,8 +1057,7 @@ void main() {
     await SharedPreferencesTodoRepository(store: store)
         .createTodo(title: 'Buy milk', createdAt: _now);
     await _home(tester, store);
-    await tester.tap(find.byKey(const ValueKey('delete-todo-1')));
-    await tester.pumpAndSettle();
+    await _openTodoAction(tester, 'todo-1', 'Delete');
     expect(
       find.text('Delete “Buy milk”? This cannot be undone.'),
       findsOneWidget,
@@ -1033,8 +1082,7 @@ void main() {
         createdAt: _now,
       );
       await _home(tester, store, notifications: notifications);
-      await tester.tap(find.byKey(const ValueKey('delete-todo-1')));
-      await tester.pumpAndSettle();
+      await _openTodoAction(tester, 'todo-1', 'Delete');
       await tester.tap(find.byKey(const Key('confirm-delete')));
       await tester.pumpAndSettle();
       expect(find.text('No active TODOs.'), findsOneWidget);
@@ -1052,8 +1100,7 @@ void main() {
         .createTodo(title: 'Buy milk', createdAt: _now);
     await _home(tester, store);
     store.rejectWrite = true;
-    await tester.tap(find.byKey(const ValueKey('delete-todo-1')));
-    await tester.pumpAndSettle();
+    await _openTodoAction(tester, 'todo-1', 'Delete');
     await tester.tap(find.byKey(const Key('confirm-delete')));
     await tester.pumpAndSettle();
     expect(find.text('Buy milk'), findsOneWidget);
@@ -1063,8 +1110,7 @@ void main() {
       hasLength(1),
     );
     store.rejectWrite = false;
-    await tester.tap(find.byKey(const ValueKey('delete-todo-1')));
-    await tester.pumpAndSettle();
+    await _openTodoAction(tester, 'todo-1', 'Delete');
     await tester.tap(find.byKey(const Key('confirm-delete')));
     await tester.pumpAndSettle();
     expect(find.text('Buy milk'), findsNothing);
