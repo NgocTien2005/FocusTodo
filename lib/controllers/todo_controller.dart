@@ -48,6 +48,7 @@ class TodoController extends ChangeNotifier {
   bool _disposed = false;
   final Set<String> _completingIds = {};
   final Set<String> _editingIds = {};
+  final Set<String> _deletingIds = {};
   final Map<String, String> _reminderScheduleErrors = {};
   final Map<String, ReminderCancellationWarning> _reminderCancellationWarnings =
       {};
@@ -88,6 +89,7 @@ class TodoController extends ChangeNotifier {
   bool get canCreate => _loaded && !_loading && !_saving && _loadError == null;
   bool isCompleting(String id) => _completingIds.contains(id);
   bool isEditing(String id) => _editingIds.contains(id);
+  bool isDeleting(String id) => _deletingIds.contains(id);
   ReminderCancellationWarning? reminderCancellationWarningForTodo(
     String todoId,
   ) {
@@ -438,7 +440,7 @@ class TodoController extends ChangeNotifier {
     if (!_loaded || _loading || _loadError != null) {
       throw StateError('Load TODOs successfully before completing one.');
     }
-    if (_completingIds.contains(id)) {
+    if (_completingIds.contains(id) || _deletingIds.contains(id)) {
       throw StateError('This TODO is already being completed.');
     }
     if (!_todos.any((todo) => todo.id == id && !todo.isCompleted)) {
@@ -465,6 +467,38 @@ class TodoController extends ChangeNotifier {
     }
   }
 
+  Future<Todo> deleteTodo(String id) async {
+    if (!_loaded || _loading || _loadError != null) {
+      throw StateError('Load TODOs successfully before deleting one.');
+    }
+    if (_deletingIds.contains(id) ||
+        _completingIds.contains(id) ||
+        _editingIds.contains(id)) {
+      throw StateError('This TODO is already being changed.');
+    }
+    final matches = _todos.where((todo) => todo.id == id);
+    final existing = matches.isEmpty ? null : matches.first;
+    if (existing == null) throw TodoNotFoundException(id);
+    if (existing.isCompleted) throw TodoAlreadyCompletedException(id);
+    _deletingIds.add(id);
+    _notify();
+    try {
+      return await _enqueue(() async {
+        final deleted = await repository.deleteTodo(id);
+        if (!_disposed) _todos = _todos.where((todo) => todo.id != id).toList();
+        await _cancelReminderLocked(
+          notificationId: deleted.notificationId,
+          todoId: deleted.id,
+          title: deleted.title,
+        );
+        return deleted;
+      });
+    } finally {
+      _deletingIds.remove(id);
+      _notify();
+    }
+  }
+
   Future<Todo> updateTodo({
     required String id,
     required String title,
@@ -478,7 +512,7 @@ class TodoController extends ChangeNotifier {
     if (_editingIds.contains(id)) {
       throw StateError('This TODO is already being edited.');
     }
-    if (_completingIds.contains(id)) {
+    if (_completingIds.contains(id) || _deletingIds.contains(id)) {
       throw StateError('This TODO is being completed.');
     }
     final matches = _todos.where((todo) => todo.id == id);

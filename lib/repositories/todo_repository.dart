@@ -28,6 +28,10 @@ abstract interface class TodoRepository {
     String? description,
     DateTime? dueAt,
   });
+
+  /// Removes and returns the latest stored TODO. Allocator counters never move
+  /// backwards, so a deleted ID cannot be reused.
+  Future<Todo> deleteTodo(String id);
 }
 
 class TodoNotFoundException implements Exception {

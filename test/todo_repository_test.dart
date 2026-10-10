@@ -453,4 +453,61 @@ void main() {
     );
     expect(store.document, original);
   });
+
+  test(
+    'delete persists, preserves other records and never lowers allocators',
+    () async {
+      final store = MemoryDocumentStore();
+      final repository = SharedPreferencesTodoRepository(store: store);
+      final deleted = await repository.createTodo(
+        title: 'Remove me',
+        createdAt: now,
+      );
+      final kept = await repository.createTodo(
+        title: 'Keep me',
+        createdAt: now,
+      );
+      final before = jsonDecode(store.document!) as Map<String, dynamic>;
+      expect(
+        (await repository.deleteTodo(deleted.id)).toJson(),
+        deleted.toJson(),
+      );
+      final after = jsonDecode(store.document!) as Map<String, dynamic>;
+      expect(after['schemaVersion'], before['schemaVersion']);
+      expect(after['nextTodoId'], before['nextTodoId']);
+      expect(after['nextNotificationId'], before['nextNotificationId']);
+      expect(
+        (await SharedPreferencesTodoRepository(
+          store: store,
+        ).loadTodos()).map((todo) => todo.toJson()).toList(),
+        [kept.toJson()],
+      );
+      final next = await repository.createTodo(title: 'Next', createdAt: now);
+      expect(next.notificationId, greaterThan(deleted.notificationId));
+      expect(next.id, isNot(deleted.id));
+    },
+  );
+
+  test(
+    'delete reports missing IDs and keeps record when write fails',
+    () async {
+      final store = MemoryDocumentStore();
+      final repository = SharedPreferencesTodoRepository(store: store);
+      final todo = await repository.createTodo(
+        title: 'Retry delete',
+        createdAt: now,
+      );
+      store.rejectWrite = true;
+      await expectLater(
+        repository.deleteTodo(todo.id),
+        throwsA(isA<TodoStorageException>()),
+      );
+      expect((await repository.loadTodos()).single.toJson(), todo.toJson());
+      store.rejectWrite = false;
+      await expectLater(
+        repository.deleteTodo('missing'),
+        throwsA(isA<TodoNotFoundException>()),
+      );
+    },
+  );
 }

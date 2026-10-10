@@ -147,6 +147,23 @@ class SharedPreferencesTodoRepository implements TodoRepository {
   });
 
   @override
+  Future<Todo> deleteTodo(String id) => _serialized(() async {
+    final document = await _read();
+    final index = document.todos.indexWhere((todo) => todo.id == id);
+    if (index < 0) throw TodoNotFoundException(id);
+    final deleted = document.todos[index];
+    final todos = List<Todo>.of(document.todos)..removeAt(index);
+    final updated = _Document(
+      todos: todos,
+      nextTodoId: document.nextTodoId,
+      nextNotificationId: document.nextNotificationId,
+    );
+    _validate(updated);
+    await _write(updated);
+    return deleted;
+  });
+
+  @override
   Future<void> saveTodos(List<Todo> todos) {
     final snapshot = List<Todo>.of(todos);
     return _serialized(() async {
