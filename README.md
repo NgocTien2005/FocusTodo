@@ -8,7 +8,7 @@ Deadline: **11 October 2026**.
 
 This Flutter Android app implements the assignment's six requirements: dated TODO creation, All/Today/Upcoming categories, category filtering, search, reminders ten minutes before due time, and completion removal from active lists. Each requirement has automated coverage; actual Android interaction and timed reminder delivery remain separate device checks recorded below.
 
-The app supports descriptions and undated TODOs, validates blank titles and past due times, and stores records locally in SharedPreferences. Completed TODOs stay in storage, disappear from active results, and have their reminder canceled. No sample data is created. Editing, deletion, completed history, cloud sync, and undo are outside this assignment scope.
+The app supports descriptions and undated TODOs, validates blank titles and past due times, and stores records locally in SharedPreferences. Completed TODOs stay in storage, disappear from active results, and have their reminder canceled. No sample data is created. Deletion, completed history, cloud sync, and undo are outside this assignment scope.
 
 Reminders require notification permission and exact-alarm access, requested from **Enable reminders**. A scheduling failure keeps the saved TODO and can be retried with the same ID. A cancellation failure keeps completion persisted and displays a retryable Home warning. TODOs due in less than ten minutes are saved without a late/immediate alert.
 
@@ -35,6 +35,8 @@ Repository creation writes each `todo-N` ID, nonnegative int32 notification ID, 
 - Search combines with the selected category and ignores case and surrounding whitespace.
 - Completion hides a TODO from active lists and cancels its reminder after persistence.
 - A TODO without a due time has no reminder.
+Active TODOs can also be edited. The form trims titles and descriptions, allows clearing description and due time, and permits title/description edits to overdue TODOs when their due time is unchanged. Updates preserve stable IDs, creation/completion state, unrelated records, and allocator counters. Reminder changes follow persistence, reuse the same notification ID, and provide retry for failures using the latest saved record. Editing preserves the current category and search query.
+
 - Reminder time is `dueAt` minus ten minutes. If it has already passed, disclose that a full ten-minute advance reminder is unavailable; never schedule into the past.
 - Editing or deleting a TODO must update or cancel its reminder.
 - Persist each nonnegative int32 `notificationId`, keep it stable, and allocate IDs without collisions, including after restart. Do not use `String.hashCode` as an allocator.

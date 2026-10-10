@@ -19,6 +19,15 @@ abstract interface class TodoRepository {
   /// Marks the latest stored record complete without replacing other data.
   /// Throws [TodoNotFoundException] when [id] has not been stored.
   Future<Todo> completeTodo(String id);
+
+  /// Updates editable fields on the latest stored record without changing IDs,
+  /// creation time, completion state, unrelated records, or allocators.
+  Future<Todo> updateTodo({
+    required String id,
+    required String title,
+    String? description,
+    DateTime? dueAt,
+  });
 }
 
 class TodoNotFoundException implements Exception {
@@ -26,4 +35,11 @@ class TodoNotFoundException implements Exception {
   final String id;
   @override
   String toString() => 'TODO "$id" was not found.';
+}
+
+class TodoAlreadyCompletedException implements Exception {
+  const TodoAlreadyCompletedException(this.id);
+  final String id;
+  @override
+  String toString() => 'Completed TODO "$id" cannot be edited.';
 }

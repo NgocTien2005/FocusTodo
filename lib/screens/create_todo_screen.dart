@@ -3,10 +3,13 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
 import '../controllers/todo_controller.dart';
+import '../models/todo.dart';
 import '../services/notification_service.dart';
 
 class CreateTodoScreen extends StatefulWidget {
-  const CreateTodoScreen({super.key});
+  const CreateTodoScreen({super.key, this.todo});
+
+  final Todo? todo;
 
   @override
   State<CreateTodoScreen> createState() => _CreateTodoScreenState();
@@ -18,12 +21,28 @@ class _CreateTodoScreenState extends State<CreateTodoScreen> {
   final _description = TextEditingController();
   DateTime? _date;
   TimeOfDay? _time;
+  bool _dueTimeChanged = false;
   String? _dueError;
   String? _saveError;
   String? _savedTodoId;
   String? _reminderError;
   bool _noAdvanceNotice = false;
+  ReminderCancellationWarning? _cancellationWarning;
   bool _submitting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final todo = widget.todo;
+    if (todo == null) return;
+    _title.text = todo.title;
+    _description.text = todo.description ?? '';
+    final due = todo.dueAt?.toLocal();
+    if (due != null) {
+      _date = DateTime(due.year, due.month, due.day);
+      _time = TimeOfDay.fromDateTime(due);
+    }
+  }
 
   Future<void> _pickDate() async {
     final now = context.read<TodoController>().currentTime.toLocal();
@@ -41,6 +60,7 @@ class _CreateTodoScreenState extends State<CreateTodoScreen> {
     if (!mounted || result == null) return;
     setState(() {
       _date = result;
+      _dueTimeChanged = true;
       _dueError = null;
     });
   }
@@ -54,6 +74,7 @@ class _CreateTodoScreenState extends State<CreateTodoScreen> {
     if (!mounted || result == null) return;
     setState(() {
       _time = result;
+      _dueTimeChanged = true;
       _dueError = null;
     });
   }
@@ -64,7 +85,11 @@ class _CreateTodoScreenState extends State<CreateTodoScreen> {
     final validTitle = _form.currentState!.validate();
     DateTime? dueAt;
     String? dueError;
-    if ((_date == null) != (_time == null)) {
+    if (widget.todo != null && !_dueTimeChanged) {
+      // Keep the exact stored instant, including seconds, when editing only
+      // title/description. This also allows metadata edits on overdue TODOs.
+      dueAt = widget.todo!.dueAt;
+    } else if ((_date == null) != (_time == null)) {
       dueError = 'Choose both a date and a time, or clear the due time.';
     } else if (_date != null && _time != null) {
       dueAt = DateTime(
@@ -82,28 +107,48 @@ class _CreateTodoScreenState extends State<CreateTodoScreen> {
           dueAt.minute != _time!.minute) {
         dueError = 'This local date/time does not exist. Choose another time.';
       } else {
-        dueError = TodoController.validateDueAt(dueAt, controller.currentTime);
+        if (widget.todo == null || _dueTimeChanged) {
+          dueError = TodoController.validateDueAt(
+            dueAt,
+            controller.currentTime,
+          );
+        }
       }
     }
     setState(() {
       _dueError = dueError;
       _saveError = null;
+      _reminderError = null;
     });
     if (!validTitle || dueError != null) return;
     setState(() => _submitting = true);
     try {
-      final saved = await controller.createTodo(
-        title: _title.text,
-        description: _description.text,
-        dueAt: dueAt,
-      );
+      final saved = widget.todo == null
+          ? await controller.createTodo(
+              title: _title.text,
+              description: _description.text,
+              dueAt: dueAt,
+            )
+          : await controller.updateTodo(
+              id: widget.todo!.id,
+              title: _title.text,
+              description: _description.text,
+              dueAt: dueAt,
+              dueTimeChanged: _dueTimeChanged,
+            );
       if (!mounted) return;
       final reminderError = controller.reminderScheduleError(saved.id);
+      final cancellationWarning = controller.reminderCancellationWarningForTodo(
+        saved.id,
+      );
       final noAdvanceNotice = controller.reminderHasNoAdvanceNotice(saved.id);
-      if (reminderError != null || noAdvanceNotice) {
+      if (reminderError != null ||
+          cancellationWarning != null ||
+          noAdvanceNotice) {
         setState(() {
           _savedTodoId = saved.id;
           _reminderError = reminderError;
+          _cancellationWarning = cancellationWarning;
           _noAdvanceNotice = noAdvanceNotice;
         });
         return;
@@ -124,7 +169,10 @@ class _CreateTodoScreenState extends State<CreateTodoScreen> {
     final controller = context.read<TodoController>();
     setState(() => _submitting = true);
     try {
-      if (controller.reminderPermissionStatus !=
+      final warning = controller.reminderCancellationWarningForTodo(todoId);
+      if (warning != null) {
+        await controller.retryCancellation(warning);
+      } else if (controller.reminderPermissionStatus !=
           ReminderPermissionStatus.enabled) {
         await controller.requestReminderPermissions();
       } else {
@@ -132,11 +180,19 @@ class _CreateTodoScreenState extends State<CreateTodoScreen> {
       }
       if (!mounted) return;
       final error = controller.reminderScheduleError(todoId);
-      if (error == null) {
+      final cancellationWarning = controller.reminderCancellationWarningForTodo(
+        todoId,
+      );
+      final noAdvanceNotice = controller.reminderHasNoAdvanceNotice(todoId);
+      if (error == null && cancellationWarning == null && !noAdvanceNotice) {
         FocusScope.of(context).unfocus();
         Navigator.of(context).pop();
       } else {
-        setState(() => _reminderError = error);
+        setState(() {
+          _reminderError = error;
+          _cancellationWarning = cancellationWarning;
+          _noAdvanceNotice = noAdvanceNotice;
+        });
       }
     } catch (error) {
       if (mounted) setState(() => _reminderError = error.toString());
@@ -158,7 +214,9 @@ class _CreateTodoScreenState extends State<CreateTodoScreen> {
     return PopScope(
       canPop: !saving,
       child: Scaffold(
-        appBar: AppBar(title: const Text('Create TODO')),
+        appBar: AppBar(
+          title: Text(widget.todo == null ? 'Create TODO' : 'Edit TODO'),
+        ),
         body: SafeArea(
           child: SingleChildScrollView(
             padding: const EdgeInsets.all(16),
@@ -262,6 +320,22 @@ class _CreateTodoScreenState extends State<CreateTodoScreen> {
                         onPressed: saving ? null : _retryReminder,
                         child: const Text('Retry reminder'),
                       ),
+                    ] else if (_cancellationWarning != null) ...[
+                      const Text(
+                        'TODO saved, but its reminder could not be updated.',
+                        key: Key('reminder-update-warning'),
+                      ),
+                      Text(
+                        _cancellationWarning!.error,
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.error,
+                        ),
+                      ),
+                      FilledButton.tonal(
+                        key: const Key('retry-reminder'),
+                        onPressed: saving ? null : _retryReminder,
+                        child: const Text('Retry reminder update'),
+                      ),
                     ] else if (_noAdvanceNotice)
                       const Text(
                         'TODO saved. A full 10-minute advance reminder is unavailable because it is due too soon.',
@@ -289,7 +363,13 @@ class _CreateTodoScreenState extends State<CreateTodoScreen> {
                     FilledButton(
                       key: const Key('save-todo'),
                       onPressed: saving ? null : _submit,
-                      child: Text(saving ? 'Saving…' : 'Save TODO'),
+                      child: Text(
+                        saving
+                            ? 'Saving…'
+                            : widget.todo == null
+                            ? 'Save TODO'
+                            : 'Save changes',
+                      ),
                     ),
                 ],
               ),

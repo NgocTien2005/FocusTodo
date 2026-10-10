@@ -503,6 +503,232 @@ void main() {
     },
   );
 
+  test(
+    'an unchanged overdue due time allows title and description edits',
+    () async {
+      final repository = SharedPreferencesTodoRepository(store: store);
+      final overdue = await repository.createTodo(
+        title: 'Overdue title',
+        description: 'Old note',
+        dueAt: now.subtract(const Duration(hours: 1)),
+        createdAt: now.subtract(const Duration(days: 2)),
+      );
+      await controller.loadTodos();
+
+      final edited = await controller.updateTodo(
+        id: overdue.id,
+        title: 'New title',
+        description: 'New note',
+        dueAt: overdue.dueAt,
+      );
+
+      expect(edited.title, 'New title');
+      expect(edited.description, 'New note');
+      expect(edited.dueAt, overdue.dueAt);
+      await expectLater(
+        controller.updateTodo(
+          id: overdue.id,
+          title: 'New title',
+          dueAt: overdue.dueAt,
+          dueTimeChanged: true,
+        ),
+        throwsA(isA<TodoValidationException>()),
+      );
+      expect((await repository.loadTodos()).single.title, 'New title');
+    },
+  );
+
+  test(
+    'edit changes category and search membership without resetting either',
+    () async {
+      final repository = SharedPreferencesTodoRepository(store: store);
+      final todo = await repository.createTodo(
+        title: 'Draft for tomorrow',
+        description: 'Planning',
+        dueAt: now.add(const Duration(days: 1)),
+        createdAt: now,
+      );
+      await controller.loadTodos();
+      controller.selectCategory(TodoCategory.upcoming);
+      controller.setSearchQuery('draft');
+      expect(controller.visibleTodos.single.id, todo.id);
+
+      await controller.updateTodo(
+        id: todo.id,
+        title: 'Review today',
+        description: 'Planning',
+        dueAt: now.add(const Duration(hours: 1)),
+        dueTimeChanged: true,
+      );
+
+      expect(controller.category, TodoCategory.upcoming);
+      expect(controller.searchQuery, 'draft');
+      expect(controller.visibleTodos, isEmpty);
+      controller.selectCategory(TodoCategory.today);
+      controller.setSearchQuery('review');
+      expect(controller.visibleTodos.single.title, 'Review today');
+    },
+  );
+
+  test(
+    'editing title or due time reschedules with the same notification ID',
+    () async {
+      final repository = SharedPreferencesTodoRepository(store: store);
+      final todo = await repository.createTodo(
+        title: 'Before edit',
+        description: 'Keep',
+        dueAt: now.add(const Duration(hours: 1)),
+        createdAt: now,
+      );
+      await controller.loadTodos();
+      final updatedDue = now.add(const Duration(hours: 2));
+
+      final edited = await controller.updateTodo(
+        id: todo.id,
+        title: 'After edit',
+        description: 'Keep',
+        dueAt: updatedDue,
+        dueTimeChanged: true,
+      );
+
+      expect(edited.notificationId, todo.notificationId);
+      expect(notifications.cancelledIds, [todo.notificationId]);
+      expect(notifications.scheduledTodos.map((item) => item.notificationId), [
+        todo.notificationId,
+        todo.notificationId,
+      ]);
+      expect(notifications.scheduledTodos.last.title, 'After edit');
+      expect(notifications.scheduledTodos.last.dueAt, updatedDue);
+      expect(notifications.pending[todo.notificationId]?.payload, todo.id);
+
+      final cleared = await controller.updateTodo(
+        id: todo.id,
+        title: 'After edit',
+        description: null,
+        dueAt: null,
+        dueTimeChanged: true,
+      );
+      expect(cleared.description, isNull);
+      expect(cleared.dueAt, isNull);
+      expect(notifications.pending, isEmpty);
+      expect(notifications.cancelledIds, [
+        todo.notificationId,
+        todo.notificationId,
+      ]);
+      expect(notifications.scheduledTodos, hasLength(2));
+    },
+  );
+
+  test(
+    'reminder schedule failure keeps edit and retry uses latest saved record',
+    () async {
+      final repository = SharedPreferencesTodoRepository(store: store);
+      final todo = await repository.createTodo(
+        title: 'Original',
+        dueAt: now.add(const Duration(hours: 1)),
+        createdAt: now,
+      );
+      await controller.loadTodos();
+      notifications.failSchedule = true;
+
+      final saved = await controller.updateTodo(
+        id: todo.id,
+        title: 'Persisted title',
+        description: 'Latest description',
+        dueAt: now.add(const Duration(hours: 2)),
+        dueTimeChanged: true,
+      );
+      expect(saved.title, 'Persisted title');
+      expect(controller.reminderScheduleError(todo.id), isNotNull);
+      expect(
+        (await repository.loadTodos()).single.description,
+        'Latest description',
+      );
+      final writesAfterEdit = store.writes;
+
+      notifications.failSchedule = false;
+      await controller.retryScheduleReminder(todo.id);
+
+      expect(store.writes, writesAfterEdit);
+      expect(notifications.scheduledTodos.last.title, 'Persisted title');
+      expect(
+        notifications.scheduledTodos.last.dueAt,
+        now.add(const Duration(hours: 2)),
+      );
+      expect(notifications.pending[todo.notificationId]?.payload, todo.id);
+      expect(controller.reminderScheduleError(todo.id), isNull);
+    },
+  );
+
+  test(
+    'cancel failure after edit retries using latest fields and stable ID',
+    () async {
+      final repository = SharedPreferencesTodoRepository(store: store);
+      final todo = await repository.createTodo(
+        title: 'Before cancel failure',
+        dueAt: now.add(const Duration(hours: 1)),
+        createdAt: now,
+      );
+      await controller.loadTodos();
+      notifications.failCancel = true;
+
+      await controller.updateTodo(
+        id: todo.id,
+        title: 'Saved despite cancel failure',
+        dueAt: now.add(const Duration(hours: 2)),
+        dueTimeChanged: true,
+      );
+      expect(controller.reminderCancellationWarnings, hasLength(1));
+      expect(
+        (await repository.loadTodos()).single.title,
+        'Saved despite cancel failure',
+      );
+
+      notifications.failCancel = false;
+      await controller.retryCancellation(
+        controller.reminderCancellationWarnings.single,
+      );
+
+      expect(controller.reminderCancellationWarnings, isEmpty);
+      expect(notifications.pending[todo.notificationId]?.payload, todo.id);
+      expect(
+        notifications.scheduledTodos.last.title,
+        'Saved despite cancel failure',
+      );
+      expect(
+        notifications.scheduledTodos.last.notificationId,
+        todo.notificationId,
+      );
+    },
+  );
+
+  test(
+    'serialized edit followed by completion preserves the latest fields',
+    () async {
+      final repository = SharedPreferencesTodoRepository(store: store);
+      final todo = await repository.createTodo(
+        title: 'Before',
+        dueAt: now.add(const Duration(hours: 1)),
+        createdAt: now,
+      );
+      await controller.loadTodos();
+      final editing = controller.updateTodo(
+        id: todo.id,
+        title: 'Edited first',
+        dueAt: now.add(const Duration(hours: 2)),
+        dueTimeChanged: true,
+      );
+      final completing = controller.completeTodo(todo.id);
+      await Future.wait([editing, completing]);
+
+      final persisted = (await repository.loadTodos()).single;
+      expect(persisted.title, 'Edited first');
+      expect(persisted.isCompleted, isTrue);
+      expect(controller.activeTodos, isEmpty);
+      expect(notifications.pending, isEmpty);
+    },
+  );
+
   test('startup reconciliation removes stale reminders and creates missing eligible ones', () async {
     final repository = SharedPreferencesTodoRepository(store: store);
     await repository.saveTodos([

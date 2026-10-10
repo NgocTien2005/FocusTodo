@@ -233,6 +233,134 @@ void main() {
     expect((await repository.completeTodo(todo.id)).isCompleted, isTrue);
   });
 
+  test(
+    'edits preserve immutable data and nullable fields clear after restart',
+    () async {
+      final store = MemoryDocumentStore();
+      final repository = SharedPreferencesTodoRepository(store: store);
+      final due = now.add(const Duration(days: 1));
+      final first = await repository.createTodo(
+        title: 'Original',
+        description: 'Old description',
+        dueAt: due,
+        createdAt: now.subtract(const Duration(days: 3)),
+      );
+      final other = await repository.createTodo(title: 'Other', createdAt: now);
+      final before = jsonDecode(store.document!) as Map<String, dynamic>;
+
+      final edited = await repository.updateTodo(
+        id: first.id,
+        title: 'Updated',
+        description: null,
+        dueAt: null,
+      );
+
+      expect(edited.id, first.id);
+      expect(edited.notificationId, first.notificationId);
+      expect(edited.createdAt.isAtSameMomentAs(first.createdAt), isTrue);
+      expect(edited.isCompleted, isFalse);
+      expect(edited.title, 'Updated');
+      expect(edited.description, isNull);
+      expect(edited.dueAt, isNull);
+      final after = jsonDecode(store.document!) as Map<String, dynamic>;
+      expect(after['schemaVersion'], before['schemaVersion']);
+      expect(after['nextTodoId'], before['nextTodoId']);
+      expect(after['nextNotificationId'], before['nextNotificationId']);
+
+      final restarted = await SharedPreferencesTodoRepository(store: store)
+          .loadTodos();
+      expect(restarted.first.toJson(), edited.toJson());
+      expect(restarted.last.toJson(), other.toJson());
+    },
+  );
+
+  test(
+    'dated and undated values can be updated and persist after restart',
+    () async {
+      final store = MemoryDocumentStore();
+      final repository = SharedPreferencesTodoRepository(store: store);
+      final dated = await repository.createTodo(
+        title: 'Dated',
+        dueAt: now.add(const Duration(days: 1)),
+        createdAt: now,
+      );
+      final undated = await repository.createTodo(
+        title: 'Undated',
+        createdAt: now,
+      );
+      final newDue = now.add(const Duration(days: 2));
+
+      await repository.updateTodo(
+        id: dated.id,
+        title: 'Moved date',
+        description: 'Added',
+        dueAt: newDue,
+      );
+      await repository.updateTodo(
+        id: undated.id,
+        title: 'Now dated',
+        description: 'Description',
+        dueAt: newDue,
+      );
+
+      final restarted = await SharedPreferencesTodoRepository(store: store)
+          .loadTodos();
+      expect(restarted[0].dueAt!.isAtSameMomentAs(newDue), isTrue);
+      expect(restarted[0].description, 'Added');
+      expect(restarted[1].dueAt!.isAtSameMomentAs(newDue), isTrue);
+      expect(restarted[1].description, 'Description');
+    },
+  );
+
+  test('edits report missing/completed records and failed writes', () async {
+    final store = MemoryDocumentStore();
+    final repository = SharedPreferencesTodoRepository(store: store);
+    final todo = await repository.createTodo(title: 'Edit me', createdAt: now);
+    final original = store.document;
+
+    await expectLater(
+      repository.updateTodo(id: 'missing', title: 'Name'),
+      throwsA(isA<TodoNotFoundException>()),
+    );
+    await repository.completeTodo(todo.id);
+    await expectLater(
+      repository.updateTodo(id: todo.id, title: 'No longer editable'),
+      throwsA(isA<TodoAlreadyCompletedException>()),
+    );
+    final active = await repository.createTodo(title: 'Retry', createdAt: now);
+    final beforeRejectedWrite = store.document;
+    store.rejectWrite = true;
+    await expectLater(
+      repository.updateTodo(id: active.id, title: 'Rejected'),
+      throwsA(isA<TodoStorageException>()),
+    );
+    expect(store.document, isNot(original));
+    expect(store.document, beforeRejectedWrite);
+    store.rejectWrite = false;
+    expect(
+      (await repository.updateTodo(id: active.id, title: 'Saved')).title,
+      'Saved',
+    );
+  });
+
+  test('concurrent edit and create preserve both latest mutations', () async {
+    final store = MemoryDocumentStore();
+    final repository = SharedPreferencesTodoRepository(store: store);
+    final original = await repository.createTodo(
+      title: 'Before',
+      createdAt: now,
+    );
+
+    await Future.wait([
+      repository.updateTodo(id: original.id, title: 'After'),
+      repository.createTodo(title: 'Concurrent create', createdAt: now),
+    ]);
+
+    final todos = await repository.loadTodos();
+    expect(todos.map((todo) => todo.title), ['After', 'Concurrent create']);
+    expect(todos.map((todo) => todo.notificationId).toSet(), {0, 1});
+  });
+
   test('storage read failure is surfaced', () async {
     final store = MemoryDocumentStore()..failRead = true;
     final repository = SharedPreferencesTodoRepository(store: store);

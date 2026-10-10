@@ -261,6 +261,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       ? 'No due date or time'
                       : 'Due ${DateFormat.yMMMd().add_jm().format(due)}',
                 ),
+                Align(
+                  alignment: AlignmentDirectional.centerEnd,
+                  child: TextButton.icon(
+                    key: ValueKey('edit-${todo.id}'),
+                    onPressed:
+                        controller.isEditing(todo.id) ||
+                            controller.isCompleting(todo.id)
+                        ? null
+                        : () {
+                            Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                builder: (_) => CreateTodoScreen(todo: todo),
+                              ),
+                            );
+                          },
+                    icon: const Icon(Icons.edit_outlined),
+                    label: Text(
+                      controller.isEditing(todo.id) ? 'Saving…' : 'Edit',
+                    ),
+                  ),
+                ),
               ],
             ),
           ),
