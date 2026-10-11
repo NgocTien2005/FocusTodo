@@ -2,8 +2,6 @@
 
 Flutter Android TODO assignment. Project name: `focus_todo`.
 
-Deadline: **11 October 2026**.
-
 ## Scope and interpretation
 
 This Flutter Android app implements the assignment's six requirements: dated TODO creation, All/Today/Upcoming categories, category filtering, search, reminders ten minutes before due time, and completion removal from active lists. Each requirement has automated coverage; actual Android interaction and timed reminder delivery remain separate device checks recorded below.
